@@ -1,7 +1,7 @@
 {
-  "domain": "generic_thermostat",
-  "name": "Generic thermostat",
-  "documentation": "https://www.home-assistant.io/components/generic_thermostat",
+  "domain": "generic_smart_thermostat",
+  "name": "Generic Smart thermostat",
+  "documentation": "",
   "requirements": [],
   "dependencies": [
     "sensor",
