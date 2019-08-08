@@ -1,4 +1,4 @@
-"""Adds support for generic thermostat units."""
+"""Adds support for generic smart thermostat units."""
 import asyncio
 import logging
 
@@ -25,6 +25,8 @@ _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_TOLERANCE = 0.3
 DEFAULT_NAME = 'Generic Smart Thermostat'
+DEFAULT_CONFORT_TEMP = 19.0
+DEFAULT_ECO_TEMP = 17.0
 
 CONF_HEATER = 'heater'
 CONF_SENSOR = 'target_sensor'
@@ -39,6 +41,9 @@ CONF_KEEP_ALIVE = 'keep_alive'
 CONF_INITIAL_OPERATION_MODE = 'initial_operation_mode'
 CONF_AWAY_TEMP = 'away_temp'
 CONF_PRECISION = 'precision'
+CONF_PLANNING = 'planning'
+CONF_CONFORT_TEMP = 'confort_temp'
+CONF_ECO_TEMP = 'eco_temp'
 SUPPORT_FLAGS = (SUPPORT_TARGET_TEMPERATURE |
                  SUPPORT_OPERATION_MODE)
 
@@ -62,6 +67,9 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_AWAY_TEMP): vol.Coerce(float),
     vol.Optional(CONF_PRECISION): vol.In(
         [PRECISION_TENTHS, PRECISION_HALVES, PRECISION_WHOLE]),
+    vol.Optional(CONF_PLANNING): cv.string,
+    vol.Optional(CONF_CONFORT_TEMP, default=DEFAULT_CONFORT_TEMP): vol.Coerce(float),
+    vol.Optional(CONF_ECO_TEMP, default=DEFAULT_ECO_TEMP): vol.Coerce(float),
 })
 
 
