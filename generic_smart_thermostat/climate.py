@@ -77,7 +77,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_CONFORT_TEMP, default=DEFAULT_CONFORT_TEMP): vol.Coerce(float),
     vol.Optional(CONF_ECO_TEMP, default=DEFAULT_ECO_TEMP): vol.Coerce(float),
     vol.Optional(CONF_CALCULATE_PERIOD, default=DEFAULT_CALCULATE_PERIOD): vol.All(
-        cv.time_period, cv.positive_timedelta),
+        int, vol.Range(min=1)),
 })
 
 
@@ -165,7 +165,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         self._away_temp = away_temp
         self._is_away = False
         self._learn = True
-        self._calculate_period = int(calculate_period.total_seconds()/60) # in minutes
+        self._calculate_period = calculate_period # in minutes
         self._data_file = hass.config.path("{}.json".format(HA_DOMAIN))
         self.endheat = datetime.now()
         self.nextcalc = self.endheat
@@ -195,9 +195,18 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             async_track_time_interval(
                 hass, self._async_control_heating, self._keep_alive)
 
+        # get in temperature
         sensor_state = hass.states.get(in_temp_sensor_entity_id)
         if sensor_state and sensor_state.state != STATE_UNKNOWN:
             self._async_update_in_temp(sensor_state)
+        # get out temperature
+        sensor_state = hass.states.get(out_temp_sensor_entity_id)
+        if sensor_state and sensor_state.state != STATE_UNKNOWN:
+            self._async_update_out_temp(sensor_state)
+        
+        # add heatbeat
+        async_track_time_interval(
+                hass, self._async_control_heating, timedelta(seconds=10))
 
     async def async_added_to_hass(self):
         """Run when entity about to be added."""
@@ -439,6 +448,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
     async def _async_control_heating(self, time=None, force=False):
 
         now = datetime.now()
+        _LOGGER.debug("Control heating @{}".format(now))
 
         if not self._enabled:  # Thermostat is off
             if self.forced or self.heat:  # thermostat setting was just changed so we kill the heating
@@ -607,7 +617,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             # heater was on max but setpoint was not reached... no learning
             _LOGGER.debug("Last power was 100% but setpoint not reached... no callibration")
             pass
-        elif self.intemp > self.Internals['LastInT'] and self.Internals['LastSetPoint'] > self.Internals['LastInT']:
+        elif self._in_temp > self.Internals['LastInT'] and self.Internals['LastSetPoint'] > self.Internals['LastInT']:
             # learning ConstC
             ConstC = (self.Internals['ConstC'] * ((self.Internals['LastSetPoint'] - self.Internals['LastInT']) /
                                                   (self._in_temp - self.Internals['LastInT']) *
@@ -618,7 +628,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                                              (self.Internals['nbCC'] + 1), 1)
             self.Internals['nbCC'] = min(self.Internals['nbCC'] + 1, 50)
             _LOGGER.debug("ConstC updated to {}".format(self.Internals['ConstC']))
-        elif self.outtemp is not None and self.Internals['LastSetPoint'] > self.Internals['LastOutT']:
+        elif self._out_temp is not None and self.Internals['LastSetPoint'] > self.Internals['LastOutT']:
             # learning ConstT
             ConstT = (self.Internals['ConstT'] + ((self.Internals['LastSetPoint'] - self._in_temp) /
                                                   (self.Internals['LastSetPoint'] - self.Internals['LastOutT']) *
