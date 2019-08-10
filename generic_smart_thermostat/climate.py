@@ -1,7 +1,8 @@
 """Adds support for generic smart thermostat units."""
 import asyncio
 import logging
-
+import json
+from datetime import datetime, timedelta
 import voluptuous as vol
 
 from homeassistant.const import (
@@ -27,14 +28,17 @@ DEFAULT_TOLERANCE = 0.3
 DEFAULT_NAME = 'Generic Smart Thermostat'
 DEFAULT_CONFORT_TEMP = 19.0
 DEFAULT_ECO_TEMP = 17.0
+DEFAULT_MIN_POWER = 5
+DEFAULT_CALCULATE_PERIOD = 30
 
 CONF_HEATER = 'heater'
-CONF_SENSOR = 'target_sensor'
+CONF_SENSOR_IN = 'in_temp_sensor'
+CONF_SENSOR_OUT = 'out_temp_sensor'
 CONF_MIN_TEMP = 'min_temp'
 CONF_MAX_TEMP = 'max_temp'
 CONF_TARGET_TEMP = 'target_temp'
 CONF_AC_MODE = 'ac_mode'
-CONF_MIN_DUR = 'min_cycle_duration'
+CONF_MIN_POWER = 'min_cycle_power'
 CONF_COLD_TOLERANCE = 'cold_tolerance'
 CONF_HOT_TOLERANCE = 'hot_tolerance'
 CONF_KEEP_ALIVE = 'keep_alive'
@@ -44,15 +48,17 @@ CONF_PRECISION = 'precision'
 CONF_PLANNING = 'planning'
 CONF_CONFORT_TEMP = 'confort_temp'
 CONF_ECO_TEMP = 'eco_temp'
+CONF_CALCULATE_PERIOD = 'calculate_period'
 SUPPORT_FLAGS = (SUPPORT_TARGET_TEMPERATURE |
                  SUPPORT_OPERATION_MODE)
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Required(CONF_HEATER): cv.entity_id,
-    vol.Required(CONF_SENSOR): cv.entity_id,
+    vol.Required(CONF_SENSOR_IN): cv.entity_id,
+    vol.Required(CONF_SENSOR_OUT): cv.entity_id,
     vol.Optional(CONF_AC_MODE): cv.boolean,
     vol.Optional(CONF_MAX_TEMP): vol.Coerce(float),
-    vol.Optional(CONF_MIN_DUR): vol.All(cv.time_period, cv.positive_timedelta),
+    vol.Optional(CONF_MIN_POWER, default=DEFAULT_MIN_POWER): vol.All(int, vol.Range(min=5, max=100)),
     vol.Optional(CONF_MIN_TEMP): vol.Coerce(float),
     vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
     vol.Optional(CONF_COLD_TOLERANCE, default=DEFAULT_TOLERANCE): vol.Coerce(
@@ -70,6 +76,8 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Optional(CONF_PLANNING): cv.string,
     vol.Optional(CONF_CONFORT_TEMP, default=DEFAULT_CONFORT_TEMP): vol.Coerce(float),
     vol.Optional(CONF_ECO_TEMP, default=DEFAULT_ECO_TEMP): vol.Coerce(float),
+    vol.Optional(CONF_CALCULATE_PERIOD, default=DEFAULT_CALCULATE_PERIOD): vol.All(
+        cv.time_period, cv.positive_timedelta),
 })
 
 
@@ -78,39 +86,53 @@ async def async_setup_platform(hass, config, async_add_entities,
     """Set up the generic thermostat platform."""
     name = config.get(CONF_NAME)
     heater_entity_id = config.get(CONF_HEATER)
-    sensor_entity_id = config.get(CONF_SENSOR)
+    in_temp_sensor_entity_id = config.get(CONF_SENSOR_IN)
+    out_temp_sensor_entity_id = config.get(CONF_SENSOR_OUT)
     min_temp = config.get(CONF_MIN_TEMP)
     max_temp = config.get(CONF_MAX_TEMP)
     target_temp = config.get(CONF_TARGET_TEMP)
     ac_mode = config.get(CONF_AC_MODE)
-    min_cycle_duration = config.get(CONF_MIN_DUR)
+    min_cycle_power = config.get(CONF_MIN_POWER)
     cold_tolerance = config.get(CONF_COLD_TOLERANCE)
     hot_tolerance = config.get(CONF_HOT_TOLERANCE)
     keep_alive = config.get(CONF_KEEP_ALIVE)
     initial_operation_mode = config.get(CONF_INITIAL_OPERATION_MODE)
     away_temp = config.get(CONF_AWAY_TEMP)
     precision = config.get(CONF_PRECISION)
+    calculate_period = config.get(CONF_CALCULATE_PERIOD)
 
     async_add_entities([GenericSmartThermostat(
-        hass, name, heater_entity_id, sensor_entity_id, min_temp, max_temp,
-        target_temp, ac_mode, min_cycle_duration, cold_tolerance,
+        hass, name, heater_entity_id, in_temp_sensor_entity_id, out_temp_sensor_entity_id, min_temp, max_temp,
+        target_temp, ac_mode, min_cycle_power, cold_tolerance,
         hot_tolerance, keep_alive, initial_operation_mode, away_temp,
-        precision)])
+        precision, calculate_period)])
 
 
 class GenericSmartThermostat(ClimateDevice, RestoreEntity):
     """Representation of a Generic Thermostat device."""
 
-    def __init__(self, hass, name, heater_entity_id, sensor_entity_id,
-                 min_temp, max_temp, target_temp, ac_mode, min_cycle_duration,
+    def __init__(self, hass, name, heater_entity_id, in_temp_sensor_entity_id,
+                 out_temp_sensor_entity_id,
+                 min_temp, max_temp, target_temp, ac_mode, min_cycle_power,
                  cold_tolerance, hot_tolerance, keep_alive,
-                 initial_operation_mode, away_temp, precision):
+                 initial_operation_mode, away_temp, precision, calculate_period):
         """Initialize the thermostat."""
         self.hass = hass
         self._name = name
         self.heater_entity_id = heater_entity_id
+        self.InternalsDefaults = {
+            'ConstC': float(60),  # inside heating coeff, depends on room size & power of your heater (60 by default)
+            'ConstT': float(1),  # external heating coeff,depends on the insulation relative to the outside (1 by default)
+            'nbCC': 0,  # number of learnings for ConstC
+            'nbCT': 0,  # number of learnings for ConstT
+            'LastPwr': 0,  # % power from last calculation
+            'LastInT': float(0),  # inside temperature at last calculation
+            'LastOutT': float(0),  # outside temprature at last calculation
+            'LastSetPoint': float(20),  # setpoint at time of last calculation
+            'ALStatus': 0}  # AutoLearning status (0 = uninitialized, 1 = initialized, 2 = disabled)
+        
         self.ac_mode = ac_mode
-        self.min_cycle_duration = min_cycle_duration
+        self.min_cycle_power = min_cycle_power
         self._cold_tolerance = cold_tolerance
         self._hot_tolerance = hot_tolerance
         self._keep_alive = keep_alive
@@ -130,7 +152,8 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         else:
             self._enabled = True
         self._active = False
-        self._cur_temp = None
+        self._in_temp = None
+        self._out_temp = None
         self._temp_lock = asyncio.Lock()
         self._min_temp = min_temp
         self._max_temp = max_temp
@@ -141,9 +164,30 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             self._support_flags = SUPPORT_FLAGS | SUPPORT_AWAY_MODE
         self._away_temp = away_temp
         self._is_away = False
+        self._learn = True
+        self._calculate_period = int(calculate_period.total_seconds()/60) # in minutes
+        self._data_file = hass.config.path("{}.json".format(HA_DOMAIN))
+        self.endheat = datetime.now()
+        self.nextcalc = self.endheat
+        self.lastcalc = self.endheat
+        self.nextupdate = self.endheat
+        self.nexttemps = self.endheat
+        self.forced = False
+        self.forcedduration = 60  # time in minutes for the forced mode
+        self.heat = False
+        # pause
+        self.pauseondelay = 2  # time between pause sensor actuation and actual pause
+        self.pauseoffdelay = 1  # time between end of pause sensor actuation and end of actual pause
+        self.pause = False
+        self.pauserequested = False
+        self.pauserequestchangedtime = datetime.now()
+
+        self.read_user_var()
 
         async_track_state_change(
-            hass, sensor_entity_id, self._async_sensor_changed)
+            hass, in_temp_sensor_entity_id, self._async_in_temp_changed)
+        async_track_state_change(
+            hass, out_temp_sensor_entity_id, self._async_out_temp_changed)
         async_track_state_change(
             hass, heater_entity_id, self._async_switch_changed)
 
@@ -151,9 +195,9 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             async_track_time_interval(
                 hass, self._async_control_heating, self._keep_alive)
 
-        sensor_state = hass.states.get(sensor_entity_id)
+        sensor_state = hass.states.get(in_temp_sensor_entity_id)
         if sensor_state and sensor_state.state != STATE_UNKNOWN:
-            self._async_update_temp(sensor_state)
+            self._async_update_in_temp(sensor_state)
 
     async def async_added_to_hass(self):
         """Run when entity about to be added."""
@@ -227,7 +271,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
     @property
     def current_temperature(self):
         """Return the sensor temperature."""
-        return self._cur_temp
+        return self._in_temp
 
     @property
     def current_operation(self):
@@ -300,12 +344,21 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         # Get default temp from super class
         return super().max_temp
 
-    async def _async_sensor_changed(self, entity_id, old_state, new_state):
+    async def _async_in_temp_changed(self, entity_id, old_state, new_state):
         """Handle temperature changes."""
         if new_state is None:
             return
 
-        self._async_update_temp(new_state)
+        self._async_update_in_temp(new_state)
+        await self._async_control_heating()
+        await self.async_update_ha_state()
+
+    async def _async_out_temp_changed(self, entity_id, old_state, new_state):
+        """Handle temperature changes."""
+        if new_state is None:
+            return
+
+        self._async_update_out_temp(new_state)
         await self._async_control_heating()
         await self.async_update_ha_state()
 
@@ -317,22 +370,30 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         self.async_schedule_update_ha_state()
 
     @callback
-    def _async_update_temp(self, state):
-        """Update thermostat with latest state from sensor."""
+    def _async_update_in_temp(self, state):
+        """Update thermostat with latest indoor temperature."""
         try:
-            self._cur_temp = float(state.state)
+            self._in_temp = float(state.state)
+        except ValueError as ex:
+            _LOGGER.error("Unable to update from sensor: %s", ex)
+    
+    @callback
+    def _async_update_out_temp(self, state):
+        """Update thermostat with latest outdoor temperature."""
+        try:
+            self._out_temp = float(state.state)
         except ValueError as ex:
             _LOGGER.error("Unable to update from sensor: %s", ex)
 
-    async def _async_control_heating(self, time=None, force=False):
+    async def _async_control_heating_old(self, time=None, force=False):
         """Check if we need to turn heating on or off."""
         async with self._temp_lock:
-            if not self._active and None not in (self._cur_temp,
+            if not self._active and None not in (self._in_temp,
                                                  self._target_temp):
                 self._active = True
                 _LOGGER.info("Obtained current and target temperature. "
                              "Generic smart thermostat active. %s, %s",
-                             self._cur_temp, self._target_temp)
+                             self._in_temp, self._target_temp)
 
             if not self._active or not self._enabled:
                 return
@@ -342,21 +403,21 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                 # ignore `min_cycle_duration`.
                 # If the `time` argument is not none, we were invoked for
                 # keep-alive purposes, and `min_cycle_duration` is irrelevant.
-                if self.min_cycle_duration:
+                if self.min_cycle_power:
                     if self._is_device_active:
                         current_state = STATE_ON
                     else:
                         current_state = STATE_OFF
                     long_enough = condition.state(
                         self.hass, self.heater_entity_id, current_state,
-                        self.min_cycle_duration)
+                        self.min_cycle_power)
                     if not long_enough:
                         return
 
             too_cold = \
-                self._target_temp - self._cur_temp >= self._cold_tolerance
+                self._target_temp - self._in_temp >= self._cold_tolerance
             too_hot = \
-                self._cur_temp - self._target_temp >= self._hot_tolerance
+                self._in_temp - self._target_temp >= self._hot_tolerance
             if self._is_device_active:
                 if (self.ac_mode and too_cold) or \
                    (not self.ac_mode and too_hot):
@@ -374,6 +435,67 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                 elif time is not None:
                     # The time argument is passed only in keep-alive case
                     await self._async_heater_turn_off()
+
+    async def _async_control_heating(self, time=None, force=False):
+
+        now = datetime.now()
+
+        if not self._enabled:  # Thermostat is off
+            if self.forced or self.heat:  # thermostat setting was just changed so we kill the heating
+                self.forced = False
+                self.endheat = now
+                _LOGGER.debug("Switching heat Off !")
+                await self._async_heater_turn_off()
+
+        elif False:  # Thermostat is in forced mode (TODO)
+            if self.forced:
+                if self.endheat <= now:
+                    self.forced = False
+                    self.endheat = now
+                    _LOGGER.debug("Forced mode Off !")
+                    await self.async_turn_on() # set thermostat to normal mode (TODO)
+                    await self._async_heater_turn_off()
+            else:
+                self.forced = True
+                self.endheat = now + timedelta(minutes=self.forcedduration)
+                _LOGGER.debug("Forced mode On !")
+                await self._async_heater_turn_on()
+
+        else:  # Thermostat is in mode auto
+
+            if self.forced:  # thermostat setting was just changed from "forced" so we kill the forced mode
+                self.forced = False
+                self.endheat = now
+                self.nextcalc = now   # this will force a recalculation on next heartbeat
+                _LOGGER.debug("Forced mode Off !")
+                await self._async_heater_turn_off()
+
+            elif (self.endheat <= now or self.pause) and self.heat:  # heat cycle is over
+                self.endheat = now
+                self.heat = False
+                if self.Internals['LastPwr'] < 100:
+                    await self._async_heater_turn_off()
+                # if power was 100(i.e. a full cycle), then we let the next calculation (at next heartbeat) decide
+                # to switch off in order to avoid potentially damaging quick off/on cycles to the heater(s)
+
+            elif self.pause and not self.pauserequested:  # we are in pause and the pause switch is now off
+                if self.pauserequestchangedtime + timedelta(minutes=self.pauseoffdelay) <= now:
+                    _LOGGER.info("Pause is now Off")
+                    self.pause = False
+
+            elif not self.pause and self.pauserequested:  # we are not in pause and the pause switch is now on
+                if self.pauserequestchangedtime + timedelta(minutes=self.pauseondelay) <= now:
+                    _LOGGER.info("Pause is now On")
+                    self.pause = True
+                    await self._async_heater_turn_off()
+
+            elif (self.nextcalc <= now) and not self.pause:  # we start a new calculation
+                self.nextcalc = now + timedelta(minutes=self._calculate_period)
+                _LOGGER.debug("Next calculation time will be : " + str(self.nextcalc))
+
+                # do the thermostat work
+                await self.auto_mode()
+
 
     @property
     def _is_device_active(self):
@@ -418,3 +540,111 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         self._target_temp = self._saved_target_temp
         await self._async_control_heating(force=True)
         await self.async_update_ha_state()
+
+
+    async def auto_mode(self):
+
+        _LOGGER.debug("Temperatures: Inside = {} / Outside = {}".format(self._in_temp, self._out_temp))
+
+        if self._in_temp > self._target_temp + self._hot_tolerance:
+            _LOGGER.debug("Temperature exceeds _target_temp")
+            overshoot = True
+            power = 0
+        else:
+            overshoot = False
+            if self._learn:
+                self.auto_callib()
+            else:
+                self._learn = True
+            if self._out_temp is None:
+                power = round((self._target_temp - self._in_temp) * self.Internals["ConstC"], 1)
+            else:
+                power = round((self._target_temp - self._in_temp) * self.Internals["ConstC"] +
+                              (self._target_temp - self._out_temp) * self.Internals["ConstT"], 1)
+
+        if power < 0:
+            power = 0  # lower limit
+        elif power > 100:
+            power = 100  # upper limit
+
+        # apply minimum power as required
+        if power <= self.min_cycle_power and (Parameters["Mode4"] == "Forced" or not overshoot):
+            _LOGGER.debug(
+                "Calculated power is {}, applying minimum power of {}".format(power, self.min_cycle_power))
+            power = self.min_cycle_power
+
+        heatduration = round(power * self._calculate_period / 100)
+        _LOGGER.debug("Calculation: Power = {} -> heat duration = {} minutes".format(power, heatduration))
+
+        if power == 0:
+            await self._async_heater_turn_off()
+            _LOGGER.debug("No heating requested !")
+        else:
+            self.endheat = datetime.now() + timedelta(minutes=heatduration)
+            _LOGGER.debug("End Heat time = " + str(self.endheat))
+            await self._async_heater_turn_on()
+            if self.Internals["ALStatus"] < 2:
+                self.Internals['LastPwr'] = power
+                self.Internals['LastInT'] = self._in_temp
+                self.Internals['LastOutT'] = self._out_temp
+                self.Internals['LastSetPoint'] = self._target_temp
+                self.Internals['ALStatus'] = 1
+                self.save_user_var()  # update user variables with latest learning
+
+        self.lastcalc = datetime.now()
+
+
+    def auto_callib(self):
+
+        now = datetime.now()
+        if self.Internals['ALStatus'] != 1:  # not initalized... do nothing
+            _LOGGER.debug("Fist pass at AutoCallib... no callibration")
+            pass
+        elif self.Internals['LastPwr'] == 0:  # heater was off last time, do nothing
+            _LOGGER.debug("Last power was zero... no callibration")
+            pass
+        elif self.Internals['LastPwr'] == 100 and self._in_temp < self.Internals['LastSetPoint']:
+            # heater was on max but setpoint was not reached... no learning
+            _LOGGER.debug("Last power was 100% but setpoint not reached... no callibration")
+            pass
+        elif self.intemp > self.Internals['LastInT'] and self.Internals['LastSetPoint'] > self.Internals['LastInT']:
+            # learning ConstC
+            ConstC = (self.Internals['ConstC'] * ((self.Internals['LastSetPoint'] - self.Internals['LastInT']) /
+                                                  (self._in_temp - self.Internals['LastInT']) *
+                                                  (timedelta.total_seconds(now - self.lastcalc) /
+                                                   (self._calculate_period * 60))))
+            _LOGGER.debug("New calc for ConstC = {}".format(ConstC))
+            self.Internals['ConstC'] = round((self.Internals['ConstC'] * self.Internals['nbCC'] + ConstC) /
+                                             (self.Internals['nbCC'] + 1), 1)
+            self.Internals['nbCC'] = min(self.Internals['nbCC'] + 1, 50)
+            _LOGGER.debug("ConstC updated to {}".format(self.Internals['ConstC']))
+        elif self.outtemp is not None and self.Internals['LastSetPoint'] > self.Internals['LastOutT']:
+            # learning ConstT
+            ConstT = (self.Internals['ConstT'] + ((self.Internals['LastSetPoint'] - self._in_temp) /
+                                                  (self.Internals['LastSetPoint'] - self.Internals['LastOutT']) *
+                                                  self.Internals['ConstC'] *
+                                                  (timedelta.total_seconds(now - self.lastcalc) /
+                                                   (self._calculate_period * 60))))
+            _LOGGER.debug("New calc for ConstT = {}".format(ConstT))
+            self.Internals['ConstT'] = round((self.Internals['ConstT'] * self.Internals['nbCT'] + ConstT) /
+                                             (self.Internals['nbCT'] + 1), 1)
+            self.Internals['nbCT'] = min(self.Internals['nbCT'] + 1, 50)
+            _LOGGER.debug("ConstT updated to {}".format(self.Internals['ConstT']))
+
+    def save_user_var(self):
+        try:
+            with open(self._data_file, "w") as fd:
+                json.dump(self.Internals, fd)
+        except:
+            _LOGGER.error("Failed to save user var to {}".format(self._data_file))
+
+    def read_user_var(self):
+        from os.path import exists
+        self.Internals = self.InternalsDefaults.copy()
+        try:
+            if exists(self._data_file):
+                with open(self._data_file, "r") as fd:
+                    self.Internals = json.load(fd)
+        except:
+            _LOGGER.error("Failed to read user var in {}".format(self._data_file))
+
