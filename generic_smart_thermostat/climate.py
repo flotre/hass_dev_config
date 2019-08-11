@@ -19,14 +19,15 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.components.climate import PLATFORM_SCHEMA, ClimateDevice
 from homeassistant.components.climate.const import (
     ATTR_AWAY_MODE, ATTR_OPERATION_MODE, STATE_AUTO, STATE_COOL, STATE_HEAT,
-    STATE_IDLE, SUPPORT_AWAY_MODE, SUPPORT_OPERATION_MODE,
-    SUPPORT_TARGET_TEMPERATURE)
+    STATE_IDLE, SUPPORT_AWAY_MODE, SUPPORT_OPERATION_MODE, SUPPORT_PRESET_MODE,
+    SUPPORT_TARGET_TEMPERATURE,
+    HVAC_MODE_AUTO, PRESET_NONE, PRESET_ECO, PRESET_AWAY, PRESET_COMFORT, PRESET_HOME )
 
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_TOLERANCE = 0.3
 DEFAULT_NAME = 'Generic Smart Thermostat'
-DEFAULT_CONFORT_TEMP = 19.0
+DEFAULT_CONFORT_TEMP = 19.0 # TODO use preset mode from climate device
 DEFAULT_ECO_TEMP = 17.0
 DEFAULT_MIN_POWER = 5
 DEFAULT_CALCULATE_PERIOD = 30
@@ -50,7 +51,8 @@ CONF_CONFORT_TEMP = 'confort_temp'
 CONF_ECO_TEMP = 'eco_temp'
 CONF_CALCULATE_PERIOD = 'calculate_period'
 SUPPORT_FLAGS = (SUPPORT_TARGET_TEMPERATURE |
-                 SUPPORT_OPERATION_MODE)
+                 SUPPORT_OPERATION_MODE )#|
+                 #SUPPORT_PRESET_MODE )
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
     vol.Required(CONF_HEATER): cv.entity_id,
@@ -84,6 +86,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
 async def async_setup_platform(hass, config, async_add_entities,
                                discovery_info=None):
     """Set up the generic thermostat platform."""
+    _LOGGER.debug("async_setup_platform")
     name = config.get(CONF_NAME)
     heater_entity_id = config.get(CONF_HEATER)
     in_temp_sensor_entity_id = config.get(CONF_SENSOR_IN)
@@ -117,6 +120,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                  cold_tolerance, hot_tolerance, keep_alive,
                  initial_operation_mode, away_temp, precision, calculate_period):
         """Initialize the thermostat."""
+        _LOGGER.debug("debug init")
         self.hass = hass
         self._name = name
         self.heater_entity_id = heater_entity_id
@@ -181,6 +185,9 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         self.pause = False
         self.pauserequested = False
         self.pauserequestchangedtime = datetime.now()
+        # modes
+        self._modes = [PRESET_NONE, PRESET_ECO, PRESET_AWAY, PRESET_COMFORT, PRESET_HOME]
+        self._current_mode = PRESET_NONE
 
         self.read_user_var()
 
@@ -207,6 +214,8 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         # add heatbeat
         async_track_time_interval(
                 hass, self._async_control_heating, timedelta(seconds=10))
+
+        _LOGGER.debug("fin init")
 
     async def async_added_to_hass(self):
         """Run when entity about to be added."""
@@ -334,6 +343,27 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         self._target_temp = temperature
         await self._async_control_heating(force=True)
         await self.async_update_ha_state()
+
+    @property
+    def preset_mode(self):
+        """Return the current preset mode, e.g., home, away, temp.
+        Requires SUPPORT_PRESET_MODE.
+        """
+        return self._current_mode
+
+    @property
+    def preset_modes(self):
+        """Return a list of available preset modes.
+        Requires SUPPORT_PRESET_MODE.
+        """
+        return self._modes
+
+    async def async_set_preset_mode(self, preset_mode):
+        """Set new preset mode."""
+        if preset_mode in self._modes:
+            self._modes = preset_mode
+        else:
+            _LOGGER.error("preset_mode inconnu : {}".format(preset_mode))
 
     @property
     def min_temp(self):
