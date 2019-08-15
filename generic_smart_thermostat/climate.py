@@ -15,6 +15,7 @@ from homeassistant.components.climate.const import (
     HVAC_MODE_COOL,
     HVAC_MODE_HEAT,
     HVAC_MODE_OFF,
+    HVAC_MODE_AUTO,
     PRESET_AWAY,
     SUPPORT_PRESET_MODE,
     SUPPORT_TARGET_TEMPERATURE,
@@ -49,7 +50,8 @@ _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_TOLERANCE = 0.3
 DEFAULT_NAME = 'Generic Smart Thermostat'
-DEFAULT_CONFORT_TEMP = 19.0 # TODO use preset mode from climate device
+DEFAULT_AWAY_TEMP = 15.0
+DEFAULT_CONFORT_TEMP = 19.0
 DEFAULT_ECO_TEMP = 17.0
 DEFAULT_MIN_POWER = 5
 DEFAULT_CALCULATE_PERIOD = 30
@@ -91,7 +93,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
         vol.Optional(CONF_INITIAL_HVAC_MODE): vol.In(
                 [HVAC_MODE_COOL, HVAC_MODE_HEAT, HVAC_MODE_OFF]
             ),
-        vol.Optional(CONF_AWAY_TEMP): vol.Coerce(float),
+        vol.Optional(CONF_AWAY_TEMP, default=DEFAULT_AWAY_TEMP): vol.Coerce(float),
         vol.Optional(CONF_PRECISION): vol.In(
             [PRECISION_TENTHS, PRECISION_HALVES, PRECISION_WHOLE]
         ),
@@ -119,6 +121,8 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     keep_alive = config.get(CONF_KEEP_ALIVE)
     initial_hvac_mode = config.get(CONF_INITIAL_HVAC_MODE)
     away_temp = config.get(CONF_AWAY_TEMP)
+    eco_temp = config.get(CONF_ECO_TEMP)
+    comfort_temp = config.get(CONF_CONFORT_TEMP)
     precision = config.get(CONF_PRECISION)
     calculate_period = config.get(CONF_CALCULATE_PERIOD)
     unit = hass.config.units.temperature_unit
@@ -140,6 +144,8 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
                 keep_alive,
                 initial_hvac_mode,
                 away_temp,
+                eco_temp,
+                comfort_temp,
                 precision,
                 unit,
                 calculate_period
@@ -168,6 +174,8 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         keep_alive,
         initial_hvac_mode,
         away_temp,
+        eco_temp,
+        comfort_temp,
         precision,
         unit,
         calculate_period
@@ -195,12 +203,12 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         self._hot_tolerance = hot_tolerance
         self._keep_alive = keep_alive
         self._hvac_mode = initial_hvac_mode
-        self._saved_target_temp = target_temp or away_temp
+        self._saved_target_temp = target_temp
         self._temp_precision = precision
         if self.ac_mode:
             self._hvac_list = [HVAC_MODE_COOL, HVAC_MODE_OFF]
         else:
-            self._hvac_list = [HVAC_MODE_HEAT, HVAC_MODE_OFF]
+            self._hvac_list = [HVAC_MODE_HEAT, HVAC_MODE_OFF, HVAC_MODE_AUTO]
         self._active = False
         self._in_temp = None
         self._out_temp = None
@@ -210,10 +218,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         self._target_temp = target_temp
         self._unit = unit
         self._support_flags = SUPPORT_FLAGS
-        if away_temp:
-            self._support_flags = SUPPORT_FLAGS | SUPPORT_PRESET_MODE
         self._away_temp = away_temp
-        self._is_away = False
         self._learn = True
         self._calculate_period = calculate_period # in minutes
         self.endheat = datetime.now()
@@ -231,8 +236,8 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         self.pauserequested = False
         self.pauserequestchangedtime = datetime.now()
         # modes
-        self._modes = [PRESET_NONE, PRESET_ECO, PRESET_AWAY, PRESET_COMFORT, PRESET_HOME]
-        self._current_mode = PRESET_NONE
+        self._preset_mode = PRESET_NONE
+        self._preset_mode_temp = {PRESET_NONE:None, PRESET_AWAY:away_temp, PRESET_ECO:eco_temp, PRESET_COMFORT:comfort_temp}
 
         _LOGGER.debug("fin init")
 
@@ -291,8 +296,9 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                     )
                 else:
                     self._target_temp = float(old_state.attributes[ATTR_TEMPERATURE])
-            if old_state.attributes.get(ATTR_PRESET_MODE) == PRESET_AWAY:
-                self._is_away = True
+
+            self._preset_mode = old_state.attributes.get(ATTR_PRESET_MODE)
+
             if not self._hvac_mode and old_state.state:
                 self._hvac_mode = old_state.state
 
@@ -373,27 +379,28 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
     @property
     def preset_mode(self):
         """Return the current preset mode, e.g., home, away, temp."""
-        if self._is_away:
-            return PRESET_AWAY
-        return None
+        return self._preset_mode
 
     @property
     def preset_modes(self):
         """Return a list of available preset modes."""
-        if self._away_temp:
-            return [PRESET_NONE, PRESET_AWAY]
-        return None
+        return [PRESET_NONE, PRESET_AWAY, PRESET_ECO, PRESET_COMFORT]
 
     async def async_set_hvac_mode(self, hvac_mode):
         """Set hvac mode."""
         if hvac_mode == HVAC_MODE_HEAT:
             self._hvac_mode = HVAC_MODE_HEAT
+            _LOGGER.debug("set hvac mode to HEAT")
             await self._async_control_heating(force=True)
         elif hvac_mode == HVAC_MODE_COOL:
             self._hvac_mode = HVAC_MODE_COOL
             await self._async_control_heating(force=True)
+        elif hvac_mode == HVAC_MODE_AUTO:
+            self._hvac_mode = HVAC_MODE_AUTO
+            await self._async_control_heating(force=True)
         elif hvac_mode == HVAC_MODE_OFF:
             self._hvac_mode = HVAC_MODE_OFF
+            _LOGGER.debug("set hvac mode to OFF")
             if self._is_device_active:
                 await self._async_heater_turn_off()
         else:
@@ -483,7 +490,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                 _LOGGER.debug("Switching heat Off !")
                 await self._async_heater_turn_off()
 
-        elif False:  # Thermostat is in forced mode (TODO)
+        elif self._hvac_mode == HVAC_MODE_HEAT:  # Thermostat is in forced mode (TODO)
             _LOGGER.debug("Thermostat is forced mode")
             if self.forced:
                 if self.endheat <= now:
@@ -497,8 +504,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                 self.endheat = now + timedelta(minutes=self.forcedduration)
                 _LOGGER.debug("Forced mode On !")
                 await self._async_heater_turn_on()
-
-        else:  # Thermostat is in mode auto
+        elif self._hvac_mode == HVAC_MODE_AUTO:  # Thermostat is in mode auto
             _LOGGER.debug("Thermostat is mode auto")
             if self.forced:  # thermostat setting was just changed from "forced" so we kill the forced mode
                 self.forced = False
@@ -526,12 +532,14 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                     self.pause = True
                     await self._async_heater_turn_off()
 
-            elif (self.nextcalc <= now) and not self.pause:  # we start a new calculation
+            elif ((self.nextcalc <= now) and not self.pause) or force:  # we start a new calculation
                 self.nextcalc = now + timedelta(minutes=self._calculate_period)
                 _LOGGER.debug("Next calculation time will be : " + str(self.nextcalc))
 
                 # do the thermostat work
                 await self.auto_mode()
+        else:
+            _LOGGER.error("unrecognized hvac mode:", self._hvac_mode)
 
 
     @property
@@ -559,15 +567,18 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
 
         This method must be run in the event loop and returns a coroutine.
         """
-        if preset_mode == PRESET_AWAY and not self._is_away:
-            self._is_away = True
-            self._saved_target_temp = self._target_temp
-            self._target_temp = self._away_temp
-            await self._async_control_heating(force=True)
-        elif preset_mode == PRESET_NONE and self._is_away:
-            self._is_away = False
-            self._target_temp = self._saved_target_temp
-            await self._async_control_heating(force=True)
+        if preset_mode in self._preset_mode_temp:
+            if self._preset_mode != preset_mode:
+                self._preset_mode = preset_mode
+                if preset_mode == PRESET_NONE:
+                    self._target_temp = self._saved_target_temp
+                else:
+                    self._saved_target_temp = self._target_temp
+                    self._target_temp = self._preset_mode_temp[preset_mode]
+                
+                await self._async_control_heating(force=True)
+        else:
+            _LOGGER.error("prest mode not supported:", preset_mode)
 
         await self.async_update_ha_state()
 
@@ -598,7 +609,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             power = 100  # upper limit
 
         # apply minimum power as required
-        if power <= self.min_cycle_power and (Parameters["Mode4"] == "Forced" or not overshoot):
+        if power <= self.min_cycle_power and (self._hvac_mode == HVAC_MODE_HEAT or not overshoot):
             _LOGGER.debug(
                 "Calculated power is {}, applying minimum power of {}".format(power, self.min_cycle_power))
             power = self.min_cycle_power
