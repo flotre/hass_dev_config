@@ -66,11 +66,11 @@ CONF_AC_MODE = 'ac_mode'
 CONF_MIN_POWER = 'min_cycle_power'
 CONF_COLD_TOLERANCE = 'cold_tolerance'
 CONF_HOT_TOLERANCE = 'hot_tolerance'
-CONF_KEEP_ALIVE = 'keep_alive'
 CONF_INITIAL_HVAC_MODE = "initial_hvac_mode"
 CONF_AWAY_TEMP = 'away_temp'
 CONF_PRECISION = 'precision'
 CONF_SCHEDULE = 'schedule'
+CONF_PREHEAT = "preheat"
 CONF_CONFORT_TEMP = 'confort_temp'
 CONF_ECO_TEMP = 'eco_temp'
 CONF_CALCULATE_PERIOD = 'calculate_period'
@@ -91,7 +91,6 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
         vol.Optional(CONF_COLD_TOLERANCE, default=DEFAULT_TOLERANCE): vol.Coerce(float),
         vol.Optional(CONF_HOT_TOLERANCE, default=DEFAULT_TOLERANCE): vol.Coerce(float),
         vol.Optional(CONF_TARGET_TEMP): vol.Coerce(float),
-        vol.Optional(CONF_KEEP_ALIVE): vol.All(cv.time_period, cv.positive_timedelta),
         vol.Optional(CONF_INITIAL_HVAC_MODE): vol.In(
                 [HVAC_MODE_COOL, HVAC_MODE_HEAT, HVAC_MODE_OFF]
             ),
@@ -109,6 +108,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
                                       }
                                     ]
             ),
+        vol.Optional(CONF_PREHEAT, default=False): cv.boolean
     }
 )
 
@@ -126,7 +126,6 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     min_cycle_power = config.get(CONF_MIN_POWER)
     cold_tolerance = config.get(CONF_COLD_TOLERANCE)
     hot_tolerance = config.get(CONF_HOT_TOLERANCE)
-    keep_alive = config.get(CONF_KEEP_ALIVE)
     initial_hvac_mode = config.get(CONF_INITIAL_HVAC_MODE)
     away_temp = config.get(CONF_AWAY_TEMP)
     eco_temp = config.get(CONF_ECO_TEMP)
@@ -135,6 +134,7 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     calculate_period = config.get(CONF_CALCULATE_PERIOD)
     unit = hass.config.units.temperature_unit
     schedule = config.get(CONF_SCHEDULE)
+    preheat = config.get(CONF_PREHEAT)
 
     async_add_entities(
         [
@@ -150,7 +150,6 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
                 min_cycle_power,
                 cold_tolerance,
                 hot_tolerance,
-                keep_alive,
                 initial_hvac_mode,
                 away_temp,
                 eco_temp,
@@ -158,7 +157,8 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
                 precision,
                 unit,
                 calculate_period,
-                schedule
+                schedule,
+                preheat
             )
         ]
     )
@@ -181,7 +181,6 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         min_cycle_power,
         cold_tolerance,
         hot_tolerance,
-        keep_alive,
         initial_hvac_mode,
         away_temp,
         eco_temp,
@@ -189,7 +188,8 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         precision,
         unit,
         calculate_period,
-        schedule
+        schedule,
+        preheat
     ):
         """Initialize the thermostat."""
         _LOGGER.debug("debug init")
@@ -212,7 +212,6 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         self.min_cycle_power = min_cycle_power
         self._cold_tolerance = cold_tolerance
         self._hot_tolerance = hot_tolerance
-        self._keep_alive = keep_alive
         self._hvac_mode = initial_hvac_mode
         self._saved_target_temp = target_temp
         self._temp_precision = precision
@@ -249,7 +248,11 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         self._preset_mode = PRESET_NONE
         self._preset_mode_temp = {PRESET_NONE:None, PRESET_AWAY:away_temp, PRESET_ECO:eco_temp, PRESET_COMFORT:comfort_temp}
 
+        # pre-heat
+        self._preheat = preheat
+
         # schedule : list of start date by day
+        self._last_do_schedule = datetime.now()
         self.schedule = [{} for i in range(7)]
         self._parse_schedule(schedule)
         _LOGGER.debug("schedule: %s", self.schedule)
@@ -271,11 +274,6 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         async_track_state_change(
             self.hass, self.heater_entity_id, self._async_switch_changed
         )
-
-        if self._keep_alive:
-            async_track_time_interval(
-                self.hass, self._async_control_heating, self._keep_alive
-            )
 
         @callback
         def _async_startup(event):
@@ -532,7 +530,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                         self.forced = False
                         self.endheat = now
                         _LOGGER.debug("Forced mode Off !")
-                        await self.async_turn_on() # set thermostat to normal mode (TODO)
+                        await self.async_set_hvac_mode(HVAC_MODE_AUTO)
                         await self._async_heater_turn_off()
                 else:
                     self.forced = True
@@ -641,7 +639,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             power = 100  # upper limit
 
         # apply minimum power as required
-        if power <= self.min_cycle_power and (self._hvac_mode == HVAC_MODE_HEAT or not overshoot):
+        if power <= self.min_cycle_power and not overshoot:
             _LOGGER.debug(
                 "Calculated power is {}, applying minimum power of {}".format(power, self.min_cycle_power))
             power = self.min_cycle_power
@@ -776,9 +774,10 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         return None, None
 
 
-    async def _async_do_schedule(self, now):
+    async def _async_do_schedule(self, time):
         if self._hvac_mode != HVAC_MODE_AUTO:
             return
+        now = datetime.now()
         # get last and next mode
         last_start, ls_mode = self._schedule_get_last_start()
         next_start, ns_mode = self._schedule_get_next_start()
@@ -788,23 +787,27 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
 
         # check if mode changed
         if last_start and ls_mode:
-            start_mode = ls_mode
+            if self._last_do_schedule < last_start and last_start <= now:
+                start_mode = ls_mode
+        
+        self._last_do_schedule = now
 
         # pre-heat mode
-        if next_start and ns_mode:
-            # if learning is done (TODO)
-            # get next target temp
-            next_target_temp = self._preset_mode_temp[ns_mode]
-            # next temperature > current temperature
-            if next_target_temp >= self._target_temp:
-                # compute pre-heat duration
-                power = self._power(next_target_temp, self._in_temp, self._out_temp)
-                heatduration = round(power * self._calculate_period / 100)
-                _LOGGER.debug("pre-heat: duration=%d", heatduration)
-                endheat = datetime.now() + timedelta(minutes=heatduration)
-                if endheat >= next_start:
-                    # activated next mode
-                    preheat_mode = ns_mode
+        if self._preheat:
+            # TODO check if learning is done
+            if next_start and ns_mode:
+                # get next target temp
+                next_target_temp = self._preset_mode_temp[ns_mode]
+                # next temperature > current temperature
+                if next_target_temp > self._target_temp:
+                    # compute pre-heat duration
+                    power = self._power(next_target_temp, self._in_temp, self._out_temp)
+                    heatduration = round(0.9 * power * self._calculate_period / 100)
+                    _LOGGER.debug("pre-heat: duration=%d", heatduration)
+                    endheat = datetime.now() + timedelta(minutes=heatduration)
+                    if endheat >= next_start:
+                        # activated next mode
+                        preheat_mode = ns_mode
         
         next_mode = None
         if preheat_mode:
