@@ -196,7 +196,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             'LastOutT': float(0),  # outside temprature at last calculation
             'LastSetPoint': float(20),  # setpoint at time of last calculation
             'ALStatus': 0}  # AutoLearning status (0 = uninitialized, 1 = initialized, 2 = disabled)
-        
+        self.Internals = self.InternalsDefaults.copy()
         self.ac_mode = ac_mode
         self.min_cycle_power = min_cycle_power
         self._cold_tolerance = cold_tolerance
@@ -209,7 +209,6 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             self._hvac_list = [HVAC_MODE_COOL, HVAC_MODE_OFF]
         else:
             self._hvac_list = [HVAC_MODE_HEAT, HVAC_MODE_OFF, HVAC_MODE_AUTO]
-        self._active = False
         self._in_temp = None
         self._out_temp = None
         self._temp_lock = asyncio.Lock()
@@ -244,10 +243,6 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
     async def async_added_to_hass(self):
         """Run when entity about to be added."""
         await super().async_added_to_hass()
-
-        # persistant config
-        self._data_file = self.hass.config.path("{}.json".format(HA_DOMAIN))
-        self.read_user_var()
 
         # Add listener
         async_track_state_change(
@@ -301,6 +296,10 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
 
             if not self._hvac_mode and old_state.state:
                 self._hvac_mode = old_state.state
+
+            # Internals
+            for k in self.Internals:
+                self.Internals[k] = old_state.attributes.get(k)
 
         else:
             # No previous state, try and restore defaults
@@ -385,6 +384,13 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
     def preset_modes(self):
         """Return a list of available preset modes."""
         return [PRESET_NONE, PRESET_AWAY, PRESET_ECO, PRESET_COMFORT]
+
+    @property
+    def state_attributes(self):
+        """Return device specific state attributes."""
+        attr = super().state_attributes
+        attr.update(self.Internals)
+        return attr
 
     async def async_set_hvac_mode(self, hvac_mode):
         """Set hvac mode."""
@@ -478,68 +484,79 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             _LOGGER.error("Unable to update from sensor: %s", ex)
 
     async def _async_control_heating(self, time=None, force=False):
+        async with self._temp_lock:
+            now = datetime.now()
+            _LOGGER.debug("Control heating @{}".format(now))
 
-        now = datetime.now()
-        _LOGGER.debug("Control heating @{}".format(now))
+            if None in (self._in_temp, self._out_temp, self._target_temp):
+                _LOGGER.info(
+                    "in, out or target temperature is None "
+                    "Thermostat active. %s, %s, %s",
+                    self._in_temp,
+                    self._out_temp,
+                    self._target_temp,
+                )
+                return
 
-        if self._hvac_mode == HVAC_MODE_OFF:  # Thermostat is off
-            _LOGGER.debug("Thermostat is off")
-            if self.forced or self.heat:  # thermostat setting was just changed so we kill the heating
-                self.forced = False
-                self.endheat = now
-                _LOGGER.debug("Switching heat Off !")
-                await self._async_heater_turn_off()
 
-        elif self._hvac_mode == HVAC_MODE_HEAT:  # Thermostat is in forced mode (TODO)
-            _LOGGER.debug("Thermostat is forced mode")
-            if self.forced:
-                if self.endheat <= now:
+            if self._hvac_mode == HVAC_MODE_OFF:  # Thermostat is off
+                _LOGGER.debug("Thermostat is off")
+                if self.forced or self.heat:  # thermostat setting was just changed so we kill the heating
                     self.forced = False
                     self.endheat = now
+                    _LOGGER.debug("Switching heat Off !")
+                    await self._async_heater_turn_off()
+
+            elif self._hvac_mode == HVAC_MODE_HEAT:  # Thermostat is in forced mode (TODO)
+                _LOGGER.debug("Thermostat is forced mode")
+                if self.forced:
+                    if self.endheat <= now:
+                        self.forced = False
+                        self.endheat = now
+                        _LOGGER.debug("Forced mode Off !")
+                        await self.async_turn_on() # set thermostat to normal mode (TODO)
+                        await self._async_heater_turn_off()
+                else:
+                    self.forced = True
+                    self.endheat = now + timedelta(minutes=self.forcedduration)
+                    _LOGGER.debug("Forced mode On !")
+                    await self._async_heater_turn_on()
+            elif self._hvac_mode == HVAC_MODE_AUTO:  # Thermostat is in mode auto
+                _LOGGER.debug("Thermostat is mode auto")
+                if self.forced:  # thermostat setting was just changed from "forced" so we kill the forced mode
+                    self.forced = False
+                    self.endheat = now
+                    self.nextcalc = now   # this will force a recalculation on next heartbeat
                     _LOGGER.debug("Forced mode Off !")
-                    await self.async_turn_on() # set thermostat to normal mode (TODO)
                     await self._async_heater_turn_off()
+
+                elif (self.endheat <= now or self.pause) and self.heat:  # heat cycle is over
+                    self.endheat = now
+                    self.heat = False
+                    if self.Internals['LastPwr'] < 100:
+                        await self._async_heater_turn_off()
+                    # if power was 100(i.e. a full cycle), then we let the next calculation (at next heartbeat) decide
+                    # to switch off in order to avoid potentially damaging quick off/on cycles to the heater(s)
+
+                elif self.pause and not self.pauserequested:  # we are in pause and the pause switch is now off
+                    if self.pauserequestchangedtime + timedelta(minutes=self.pauseoffdelay) <= now:
+                        _LOGGER.info("Pause is now Off")
+                        self.pause = False
+
+                elif not self.pause and self.pauserequested:  # we are not in pause and the pause switch is now on
+                    if self.pauserequestchangedtime + timedelta(minutes=self.pauseondelay) <= now:
+                        _LOGGER.info("Pause is now On")
+                        self.pause = True
+                        await self._async_heater_turn_off()
+
+                elif ((self.nextcalc <= now) and not self.pause) or force:  # we start a new calculation
+                    self.nextcalc = now + timedelta(minutes=self._calculate_period)
+                    _LOGGER.debug("Next calculation time will be : " + str(self.nextcalc))
+
+                    # do the thermostat work
+                    await self.auto_mode()
             else:
-                self.forced = True
-                self.endheat = now + timedelta(minutes=self.forcedduration)
-                _LOGGER.debug("Forced mode On !")
-                await self._async_heater_turn_on()
-        elif self._hvac_mode == HVAC_MODE_AUTO:  # Thermostat is in mode auto
-            _LOGGER.debug("Thermostat is mode auto")
-            if self.forced:  # thermostat setting was just changed from "forced" so we kill the forced mode
-                self.forced = False
-                self.endheat = now
-                self.nextcalc = now   # this will force a recalculation on next heartbeat
-                _LOGGER.debug("Forced mode Off !")
-                await self._async_heater_turn_off()
-
-            elif (self.endheat <= now or self.pause) and self.heat:  # heat cycle is over
-                self.endheat = now
-                self.heat = False
-                if self.Internals['LastPwr'] < 100:
-                    await self._async_heater_turn_off()
-                # if power was 100(i.e. a full cycle), then we let the next calculation (at next heartbeat) decide
-                # to switch off in order to avoid potentially damaging quick off/on cycles to the heater(s)
-
-            elif self.pause and not self.pauserequested:  # we are in pause and the pause switch is now off
-                if self.pauserequestchangedtime + timedelta(minutes=self.pauseoffdelay) <= now:
-                    _LOGGER.info("Pause is now Off")
-                    self.pause = False
-
-            elif not self.pause and self.pauserequested:  # we are not in pause and the pause switch is now on
-                if self.pauserequestchangedtime + timedelta(minutes=self.pauseondelay) <= now:
-                    _LOGGER.info("Pause is now On")
-                    self.pause = True
-                    await self._async_heater_turn_off()
-
-            elif ((self.nextcalc <= now) and not self.pause) or force:  # we start a new calculation
-                self.nextcalc = now + timedelta(minutes=self._calculate_period)
-                _LOGGER.debug("Next calculation time will be : " + str(self.nextcalc))
-
-                # do the thermostat work
-                await self.auto_mode()
-        else:
-            _LOGGER.error("unrecognized hvac mode:", self._hvac_mode)
+                _LOGGER.error("unrecognized hvac mode:", self._hvac_mode)
 
 
     @property
@@ -630,7 +647,8 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                 self.Internals['LastOutT'] = self._out_temp
                 self.Internals['LastSetPoint'] = self._target_temp
                 self.Internals['ALStatus'] = 1
-                self.save_user_var()  # update user variables with latest learning
+                # store values
+                await self.async_update_ha_state()
 
         self.lastcalc = datetime.now()
 
@@ -672,20 +690,5 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             self.Internals['nbCT'] = min(self.Internals['nbCT'] + 1, 50)
             _LOGGER.debug("ConstT updated to {}".format(self.Internals['ConstT']))
 
-    def save_user_var(self):
-        try:
-            with open(self._data_file, "w") as fd:
-                json.dump(self.Internals, fd)
-        except:
-            _LOGGER.error("Failed to save user var to {}".format(self._data_file))
 
-    def read_user_var(self):
-        from os.path import exists
-        self.Internals = self.InternalsDefaults.copy()
-        try:
-            if exists(self._data_file):
-                with open(self._data_file, "r") as fd:
-                    self.Internals = json.load(fd)
-        except:
-            _LOGGER.error("Failed to read user var in {}".format(self._data_file))
 
