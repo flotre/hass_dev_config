@@ -70,11 +70,13 @@ CONF_KEEP_ALIVE = 'keep_alive'
 CONF_INITIAL_HVAC_MODE = "initial_hvac_mode"
 CONF_AWAY_TEMP = 'away_temp'
 CONF_PRECISION = 'precision'
-CONF_PLANNING = 'planning'
+CONF_SCHEDULE = 'schedule'
 CONF_CONFORT_TEMP = 'confort_temp'
 CONF_ECO_TEMP = 'eco_temp'
 CONF_CALCULATE_PERIOD = 'calculate_period'
 SUPPORT_FLAGS = (SUPPORT_TARGET_TEMPERATURE | SUPPORT_PRESET_MODE )
+
+PRESET_MODES = [PRESET_NONE, PRESET_AWAY, PRESET_ECO, PRESET_COMFORT]
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
@@ -97,10 +99,16 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
         vol.Optional(CONF_PRECISION): vol.In(
             [PRECISION_TENTHS, PRECISION_HALVES, PRECISION_WHOLE]
         ),
-        vol.Optional(CONF_PLANNING): cv.string,
         vol.Optional(CONF_CONFORT_TEMP, default=DEFAULT_CONFORT_TEMP): vol.Coerce(float),
         vol.Optional(CONF_ECO_TEMP, default=DEFAULT_ECO_TEMP): vol.Coerce(float),
         vol.Optional(CONF_CALCULATE_PERIOD, default=DEFAULT_CALCULATE_PERIOD): vol.All(int, vol.Range(min=1)),
+        vol.Optional(CONF_SCHEDULE, default=[]):
+            vol.All(cv.ensure_list, [{vol.Required('mode'):vol.Any(vol.In(PRESET_MODES), vol.Coerce(float)),
+                                      vol.Required('days'):cv.string,
+                                      vol.Required('start'):cv.time
+                                      }
+                                    ]
+            ),
     }
 )
 
@@ -126,6 +134,7 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     precision = config.get(CONF_PRECISION)
     calculate_period = config.get(CONF_CALCULATE_PERIOD)
     unit = hass.config.units.temperature_unit
+    schedule = config.get(CONF_SCHEDULE)
 
     async_add_entities(
         [
@@ -148,7 +157,8 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
                 comfort_temp,
                 precision,
                 unit,
-                calculate_period
+                calculate_period,
+                schedule
             )
         ]
     )
@@ -178,7 +188,8 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         comfort_temp,
         precision,
         unit,
-        calculate_period
+        calculate_period,
+        schedule
     ):
         """Initialize the thermostat."""
         _LOGGER.debug("debug init")
@@ -238,7 +249,13 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         self._preset_mode = PRESET_NONE
         self._preset_mode_temp = {PRESET_NONE:None, PRESET_AWAY:away_temp, PRESET_ECO:eco_temp, PRESET_COMFORT:comfort_temp}
 
+        # schedule : list of start date by day
+        self.schedule = [{} for i in range(7)]
+        self._parse_schedule(schedule)
+        _LOGGER.debug("schedule: %s", self.schedule)
+
         _LOGGER.debug("fin init")
+        
 
     async def async_added_to_hass(self):
         """Run when entity about to be added."""
@@ -316,9 +333,11 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             self._hvac_mode = HVAC_MODE_OFF
                             
         # add heatbeat
-        async_track_time_interval(
-                self.hass, self._async_control_heating, timedelta(seconds=10))
+        async_track_time_interval(self.hass, self._async_control_heating, timedelta(seconds=10))
 
+        # schedule
+        async_track_time_interval(self.hass, self._async_do_schedule, timedelta(seconds=10))
+        
     @property
     def should_poll(self):
         """Return the polling state."""
@@ -383,7 +402,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
     @property
     def preset_modes(self):
         """Return a list of available preset modes."""
-        return [PRESET_NONE, PRESET_AWAY, PRESET_ECO, PRESET_COMFORT]
+        return PRESET_MODES
 
     @property
     def state_attributes(self):
@@ -491,23 +510,22 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             if None in (self._in_temp, self._out_temp, self._target_temp):
                 _LOGGER.info(
                     "in, out or target temperature is None "
-                    "Thermostat active. %s, %s, %s",
+                    "Thermostat not active. %s, %s, %s",
                     self._in_temp,
                     self._out_temp,
                     self._target_temp,
                 )
                 return
-
-
-            if self._hvac_mode == HVAC_MODE_OFF:  # Thermostat is off
+            # Thermostat is off
+            if self._hvac_mode == HVAC_MODE_OFF:
                 _LOGGER.debug("Thermostat is off")
                 if self.forced or self.heat:  # thermostat setting was just changed so we kill the heating
                     self.forced = False
                     self.endheat = now
                     _LOGGER.debug("Switching heat Off !")
                     await self._async_heater_turn_off()
-
-            elif self._hvac_mode == HVAC_MODE_HEAT:  # Thermostat is in forced mode (TODO)
+            # Thermostat is in forced mode
+            elif self._hvac_mode == HVAC_MODE_HEAT:
                 _LOGGER.debug("Thermostat is forced mode")
                 if self.forced:
                     if self.endheat <= now:
@@ -521,35 +539,37 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                     self.endheat = now + timedelta(minutes=self.forcedduration)
                     _LOGGER.debug("Forced mode On !")
                     await self._async_heater_turn_on()
-            elif self._hvac_mode == HVAC_MODE_AUTO:  # Thermostat is in mode auto
+            # Thermostat is in mode auto
+            elif self._hvac_mode == HVAC_MODE_AUTO:
                 _LOGGER.debug("Thermostat is mode auto")
-                if self.forced:  # thermostat setting was just changed from "forced" so we kill the forced mode
+                # thermostat setting was just changed from "forced" so we kill the forced mode
+                if self.forced:
                     self.forced = False
                     self.endheat = now
                     self.nextcalc = now   # this will force a recalculation on next heartbeat
                     _LOGGER.debug("Forced mode Off !")
                     await self._async_heater_turn_off()
-
-                elif (self.endheat <= now or self.pause) and self.heat:  # heat cycle is over
+                # heat cycle is over
+                elif (self.endheat <= now or self.pause) and self.heat:
                     self.endheat = now
                     self.heat = False
                     if self.Internals['LastPwr'] < 100:
                         await self._async_heater_turn_off()
                     # if power was 100(i.e. a full cycle), then we let the next calculation (at next heartbeat) decide
                     # to switch off in order to avoid potentially damaging quick off/on cycles to the heater(s)
-
-                elif self.pause and not self.pauserequested:  # we are in pause and the pause switch is now off
+                # we are in pause and the pause switch is now off
+                elif self.pause and not self.pauserequested:
                     if self.pauserequestchangedtime + timedelta(minutes=self.pauseoffdelay) <= now:
                         _LOGGER.info("Pause is now Off")
                         self.pause = False
-
-                elif not self.pause and self.pauserequested:  # we are not in pause and the pause switch is now on
+                # we are not in pause and the pause switch is now on
+                elif not self.pause and self.pauserequested:
                     if self.pauserequestchangedtime + timedelta(minutes=self.pauseondelay) <= now:
                         _LOGGER.info("Pause is now On")
                         self.pause = True
                         await self._async_heater_turn_off()
-
-                elif ((self.nextcalc <= now) and not self.pause) or force:  # we start a new calculation
+                # we start a new calculation
+                elif ((self.nextcalc <= now) and not self.pause) or force:
                     self.nextcalc = now + timedelta(minutes=self._calculate_period)
                     _LOGGER.debug("Next calculation time will be : " + str(self.nextcalc))
 
@@ -595,13 +615,12 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                 
                 await self._async_control_heating(force=True)
         else:
-            _LOGGER.error("prest mode not supported:", preset_mode)
+            _LOGGER.error("preset mode not supported:", preset_mode)
 
         await self.async_update_ha_state()
 
 
     async def auto_mode(self):
-
         _LOGGER.debug("Temperatures: Inside = {} / Outside = {}".format(self._in_temp, self._out_temp))
 
         if self._in_temp > self._target_temp + self._hot_tolerance:
@@ -614,11 +633,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                 self.auto_callib()
             else:
                 self._learn = True
-            if self._out_temp is None:
-                power = round((self._target_temp - self._in_temp) * self.Internals["ConstC"], 1)
-            else:
-                power = round((self._target_temp - self._in_temp) * self.Internals["ConstC"] +
-                              (self._target_temp - self._out_temp) * self.Internals["ConstT"], 1)
+            power = self._power(self._target_temp, self._in_temp, self._out_temp)
 
         if power < 0:
             power = 0  # lower limit
@@ -689,6 +704,119 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                                              (self.Internals['nbCT'] + 1), 1)
             self.Internals['nbCT'] = min(self.Internals['nbCT'] + 1, 50)
             _LOGGER.debug("ConstT updated to {}".format(self.Internals['ConstT']))
+
+    def _power(self, target_temp, in_temp, out_temp):
+        if out_temp is None:
+            power = round((target_temp - in_temp) * self.Internals["ConstC"], 1)
+        else:
+            power = round((target_temp - in_temp) * self.Internals["ConstC"] +
+                            (target_temp - out_temp) * self.Internals["ConstT"], 1)
+        return power
+
+    def _parse_schedule(self, schedule):
+        for s in schedule:
+            days = s['days']
+            start = s['start']
+            mode = s['mode']
+            if "-" in days:
+                # range of days
+                s, e = days.split("-")
+                try: 
+                    days = range(int(s), int(e)+1 )
+                except ValueError:
+                    _LOGGER.error("schedule format error for %s (ignored)", s['days'])
+                    continue
+            elif "," in days:
+                # list of days
+                days = days.split(',')
+            else:
+                # unique day
+                days = [days]
+            # store schedule
+            for d in days:
+                try:
+                    intday = int(d)
+                except ValueError:
+                    _LOGGER.error("schedule format error for %s (ignored)", s['days'])
+                    continue
+                if intday >= 0 and intday <= 6:
+                    self.schedule[intday][start] = mode
+                else:
+                    _LOGGER.error("schedule format error for %s (ignored)", s['days'])
+                    continue
+    
+    def _schedule_get_next_start(self):
+        now = datetime.now()
+        weekday = now.weekday()
+        for i in range(7):
+            wd = (weekday + i) % 7
+            dict_start = sorted(self.schedule[wd])
+            for start in dict_start:
+                dt_start = now.replace(day=now.day+i, hour=start.hour, minute=start.minute, second=0, microsecond=0)
+                if dt_start >= now:
+                    # turn mode on
+                    _LOGGER.debug("Schedule: next start mode %s@%s", self.schedule[wd][start], dt_start)
+                    return dt_start, self.schedule[wd][start]
+        
+        return None, None
+    
+    def _schedule_get_last_start(self):
+        now = datetime.now()
+        weekday = now.weekday()
+        for i in range(7):
+            wd = (weekday - i) % 7
+            dict_start = reversed(sorted(self.schedule[wd]))
+            for start in dict_start:
+                dt_start = now.replace(day=now.day+i, hour=start.hour, minute=start.minute, second=0, microsecond=0)
+                if dt_start <= now:
+                    # turn mode on
+                    _LOGGER.debug("Schedule: last start mode %s@%s", self.schedule[wd][start], dt_start)
+                    return dt_start, self.schedule[wd][start]
+        
+        return None, None
+
+
+    async def _async_do_schedule(self, now):
+        if self._hvac_mode != HVAC_MODE_AUTO:
+            return
+        # get last and next mode
+        last_start, ls_mode = self._schedule_get_last_start()
+        next_start, ns_mode = self._schedule_get_next_start()
+
+        start_mode = None
+        preheat_mode = None
+
+        # check if mode changed
+        if last_start and ls_mode:
+            start_mode = ls_mode
+
+        # pre-heat mode
+        if next_start and ns_mode:
+            # if learning is done (TODO)
+            # get next target temp
+            next_target_temp = self._preset_mode_temp[ns_mode]
+            # next temperature > current temperature
+            if next_target_temp >= self._target_temp:
+                # compute pre-heat duration
+                power = self._power(next_target_temp, self._in_temp, self._out_temp)
+                heatduration = round(power * self._calculate_period / 100)
+                _LOGGER.debug("pre-heat: duration=%d", heatduration)
+                endheat = datetime.now() + timedelta(minutes=heatduration)
+                if endheat >= next_start:
+                    # activated next mode
+                    preheat_mode = ns_mode
+        
+        next_mode = None
+        if preheat_mode:
+            _LOGGER.debug("pre-heat: next mode to %s@%s",preheat_mode, next_start)
+            next_mode = preheat_mode
+        elif start_mode:
+            next_mode = start_mode
+            _LOGGER.debug("schedule: next mode to %s@%s",ls_mode, last_start)
+        # apply new mode
+        if next_mode and next_mode != self.preset_mode:
+            _LOGGER.info("schedule: change mode to %s", next_mode)
+            await self.async_set_preset_mode(next_mode)
 
 
 
