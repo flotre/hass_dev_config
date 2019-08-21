@@ -1,0 +1,9 @@
+{
+  "domain": "schedule_list",
+  "name": "Schedule list",
+  "documentation": "https://www.home-assistant.io/components/schedule_list",
+  "requirements": [],
+  "dependencies": [
+  ],
+  "codeowners": []
+}
