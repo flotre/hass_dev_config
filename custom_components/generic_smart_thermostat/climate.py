@@ -503,7 +503,6 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
     async def _async_control_heating(self, time=None, force=False):
         async with self._temp_lock:
             now = datetime.now()
-            _LOGGER.debug("Control heating @{}".format(now))
 
             if None in (self._in_temp, self._out_temp, self._target_temp):
                 _LOGGER.info(
@@ -777,6 +776,11 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
     async def _async_do_schedule(self, time):
         if self._hvac_mode != HVAC_MODE_AUTO:
             return
+
+        # get planning
+        data = self.hass.data["schedule_list"]
+        _LOGGER.debug("schedule schedule list: %s", data.items)
+        # date
         now = datetime.now()
         # get last and next mode
         last_start, ls_mode = self._schedule_get_last_start()
