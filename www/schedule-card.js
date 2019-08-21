@@ -99,34 +99,28 @@ class ScheduleListCard extends LitElement {
             >
             </ha-icon>
             
-                <paper-dropdown-menu label="Mode">
-                    <paper-listbox slot="dropdown-content" selected="1">
+            <paper-dropdown-menu label="Mode" class="addBox heatmode">
+                <paper-listbox slot="dropdown-content" selected="1">
                     <paper-item>eco</paper-item>
                     <paper-item>comfort</paper-item>
                     <paper-item>away</paper-item>
-                    </paper-listbox>
-                </paper-dropdown-menu>
-                <paper-dropdown-menu label="Days">
-                    <paper-listbox slot="dropdown-content" selected="1">
-                    <paper-item _data="0-6">all</paper-item>
-                    <paper-item _data="5-6">Weekend</paper-item>
-                    <paper-item _data="0">Lundi</paper-item>
-                    <paper-item _data="1">Mardi</paper-item>
-                    <paper-item _data="2">Mercredi</paper-item>
-                    <paper-item _data="3">Jeudi</paper-item>
-                    <paper-item _data="4">Vendredi</paper-item>
-                    <paper-item _data="5">Samedi</paper-item>
-                    <paper-item _data="6">Dimanche</paper-item>
-                    </paper-listbox>
-                </paper-dropdown-menu>
+                </paper-listbox>
+            </paper-dropdown-menu>
+            <paper-checkbox dir="rtl" class="cbDays">L</paper-checkbox>
+            <paper-checkbox dir="rtl" class="cbDays">M</paper-checkbox>
+            <paper-checkbox dir="rtl" class="cbDays">M</paper-checkbox>
+            <paper-checkbox dir="rtl" class="cbDays">J</paper-checkbox>
+            <paper-checkbox dir="rtl" class="cbDays">V</paper-checkbox>
+            <paper-checkbox dir="rtl" class="cbDays">S</paper-checkbox>
+            <paper-checkbox dir="rtl" class="cbDays">D</paper-checkbox>
             
-              <paper-input
-                label="Début"
-                class="addBox"
-                placeholder="mode days starttime"
-                @keydown="${this._addKeyPress}"
-                type="time"
-              ></paper-input>
+            <paper-input
+            label="Début"
+            class="addBox starttime"
+            placeholder="mode days starttime"
+            @keydown="${this._addKeyPress}"
+            type="time"
+            ></paper-input>
             
           </div>
           ${repeat(
@@ -221,6 +215,7 @@ class ScheduleListCard extends LitElement {
           display: flex;
           flex-direction: row;
           align-items: center;
+          justify-content: space-between;
         }
   
         .addButton {
@@ -228,8 +223,15 @@ class ScheduleListCard extends LitElement {
           cursor: pointer;
         }
   
-        paper-item-body {
-          width: 75%;
+        .addBox {
+          display: flex;
+          padding-right: 5px;
+        }
+
+        .cbDays {
+            padding: 0 2px 0 0;
+            --paper-checkbox-size: 12px;
+            --paper-checkbox-label-spacing: 2px;
         }
   
         paper-checkbox {
@@ -248,6 +250,7 @@ class ScheduleListCard extends LitElement {
           }
           position: relative;
           top: 1px;
+          --paper-input-container-shared-input-style_-_width: 5em;
         }
   
         .checked {
@@ -320,21 +323,30 @@ class ScheduleListCard extends LitElement {
     }
   
     get _newItem() {
-      return this.shadowRoot.querySelector(".addBox");
+      var heatmode = this.shadowRoot.querySelector(".heatmode").value;
+      var days = []
+      this.shadowRoot.querySelectorAll(".cbDays").forEach(function(element, index) {
+        if( element.checked ) {
+            days.push(index)
+        }
+      });
+      var starttime = this.shadowRoot.querySelector(".starttime").value;
+      console.log("starttime", starttime);
+
+      return {"heatmode":heatmode, "days":days, "starttime":starttime}
+
     }
   
     _addItem(ev) {
       const newItem = this._newItem;
+
+      console.log("_addItem", newItem);
   
-      if (newItem.value.length > 0) {
-        console.log("_addItem");
-        addItem(this.hass, newItem.value).catch(() => this._fetchData());
+      if (newItem.heatmode.length > 0 && newItem.days.length > 0 && newItem.starttime.length > 0) {
+        
+        addItem(this.hass, newItem.heatmode).catch(() => this._fetchData());
       }
   
-      newItem.value = "";
-      if (ev) {
-        newItem.focus();
-      }
     }
   
     _addKeyPress(ev) {
