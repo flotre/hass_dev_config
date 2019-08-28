@@ -15,12 +15,14 @@ class ScheduleCard extends LitElement {
     }
     static get properties() {
         return {
-          hass: {},
-          _config: {},
-          _uncheckedItems: [],
-          _checkedItems: []
+          myProp: {type: Number},
         };
-      }
+    }
+
+    constructor() {
+        super();
+        this.myProp = 1;
+    }
   
   
     getCardSize() {
@@ -29,15 +31,14 @@ class ScheduleCard extends LitElement {
   
     setConfig(config) {
       this._config = config;
-      this._uncheckedItems = [];
-      this._checkedItems = [];
+      this._select_start = null;
       this._hours = [];
       this._weekdays = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
       /*for(var i=0; i<=24*60; i+=30) {
           this._hours.push(this._pad(Math.floor(i/60))+":"+this._pad(((i/30)%2)*30));
       }
       console.log(this._hours);*/
-      for(var i=0; i<=24; i+=0.5) {
+      for(var i=0; i<24; i+=0.5) {
         this._hours.push(i);
         }
     }
@@ -54,54 +55,61 @@ class ScheduleCard extends LitElement {
   
       return html`
         <ha-card .header="${this._config.title}">
-            <div class="row">
-                <div class="entete">Heures</div>
-                <div class="row">
+            <div class="wrapper">
+                
+                <div class="entete_h"></div>
+                
+                ${repeat(this._hours, (item) => item,
+                    (item, index) =>
+                    html`${index%2==0 ? html`<div id="entete_${index}" class="item hours">${item}</div>` : ''}`
+                )}
+                
+                ${repeat(this._weekdays, (item) => item,
+                    (day, dindex) =>
+                    html`<div class="entete">${day}</div>
                     ${repeat(this._hours, (item) => item,
-                        (item, index) =>
-                        html`<div id="entete_${index}" class="item">${index%2==0 ? item : ''}</div>`
-                        )}
-                </div>
+                        (hour, hindex) =>
+                        html`<div id="${dindex}-${hindex}" class="item" style="background-color: lightblue;"
+                                @click="${this._onclick}"
+                                @pointerdown="${this._onpointerdown}"
+                                @pointerup="${this._onpointerup}"
+                                @pointerenter="${this._onpointerenter}"
+                                >
+                                </div>`
+                    )}
+                    `
+                )}
+                
             </div>
-            <div class="row">
-                <div class="entete">Lundi</div>
-                <div class="row">
-                    ${repeat(this._hours, (item) => item,
-                        (item, index) =>
-                        html`<div id="${index}" class="item" style="background-color: lightblue;"
-                                  @click=${this._onclick}
-                                  @pointerdown=${this._onpointerdown}
-                                  @pointerup=${this._onpointerup}
-                                  >
-                                  </div>`
-                        )}
-                </div>
-            </div>
+            <paper-dropdown-menu label="Mode">
+                <paper-listbox slot="dropdown-content" selected="${this.myProp}" @selected-changed="${this._modeSelected}">
+                    <paper-item>eco</paper-item>
+                    <paper-item>comfort</paper-item>
+                    <paper-item>away</paper-item>
+                </paper-listbox>
+            </paper-dropdown-menu>
         </ha-card>
       `;
     }
   
     static get styles() {
       return css`
-        .row {
-            display: flex;
-            flex-direction: row;
-            width: 100%;
+        .wrapper {
+            display: grid;
+            grid-template-columns: auto repeat(48, 1fr);
+            grid-gap: 1px;
         }
 
-        .item {
-            width: calc(100% / 24);
-            margin-right: 2px;
+        .hours {
+            font-size: 10px;
+            grid-column-start: span 2;
         }
-
-        .entete {
-            min-width: 4em;
-        }
+    
       `;
     }
 
     _onclick(ev) {
-        console.log("on click", ev);
+        console.log("on click", ev, this.myProp);
         if(ev) {
             ev.target.style.background = "#ff77ee";
         }
@@ -109,11 +117,24 @@ class ScheduleCard extends LitElement {
 
     _onpointerdown(ev) {
         console.log("on pointerdown", ev);
+        this._select_start = ev.target;
     }
   
     _onpointerup(ev) {
         console.log("on pointerup", ev);
-    }    
+        this._select_start = null;
+    }
+    
+    _onpointerenter(ev) {
+        
+        if( this._select_start ) {
+            ev.target.style.background = "#ff77ee";
+        }
+    }
+
+    _modeSelected(ev) {
+        console.log("on _modeSelected", ev);
+    }
 }
   
 
