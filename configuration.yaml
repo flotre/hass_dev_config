@@ -22,10 +22,10 @@ logger:
     homeassistant.config: warning
     asyncio: warning
     custom_components.generic_smart_thermostat: debug
+    custom_components.schedule_list: debug
 
 schedule_list:
 
-shopping_list:
 
 input_boolean:
   testswitch:
@@ -82,7 +82,7 @@ climate:
     heater: switch.testswitch
     in_temp_sensor: sensor.temp_in
     out_temp_sensor: sensor.temp_out
-    calculate_period: 1
+    calculate_period: 30
     preheat: true
     schedule:
       - mode: "eco"

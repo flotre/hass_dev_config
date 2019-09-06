@@ -1,55 +1,64 @@
-import {
-    html,
-    LitElement,
-    css
-  } from "https://unpkg.com/lit-element@2.0.1/lit-element.js?module";
-import { repeat } from "https://unpkg.com/lit-html/directives/repeat.js?module";
-  
 
-const fetchItems = (hass) =>
+
+const LitElement = Object.getPrototypeOf(
+    customElements.get("hui-view")
+  );
+const html = LitElement.prototype.html;
+const css = LitElement.prototype.css;
+
+
+const MODES = {
+    eco: {color:'lightblue', label:'Eco'},
+    comfort: {color:'red', label:'Confort'},
+    away: {color:'green', label:'Absent'}
+};
+
+const fetchSchedule = (hass, sid) =>
   hass.callWS({
-    type: "schedule_list/items",
+    type: "schedule_list/fetch",
+    schedule_id: sid
   });
 
-const updateItem = (
+const updateSchedule = (
   hass,
-  itemId,
-  item
+  sid,
+  s,
+  e
 ) =>
   hass.callWS({
-    type: "schedule_list/items/update",
-    item_id: itemId,
-    ...item,
+    type: "schedule_list/update",
+    schedule_id: sid,
+    data: {schedule: [...s], entities:[...e]},
   });
 
-const clearItems = (hass) =>
-  hass.callWS({
-    type: "schedule_list/items/clear",
-  });
 
-const addItem = (
-  hass,
-  name
-) =>
-  hass.callWS({
-    type: "schedule_list/items/add",
-    name,
-  });
 
-  
-class ScheduleListCard extends LitElement {
+
+class ScheduleCard extends LitElement {
   
     static getStubConfig() {
       return {};
     }
     static get properties() {
         return {
+          schedule: {type: Array},
           hass: {},
-          _config: {},
-          _uncheckedItems: [],
-          _checkedItems: []
+          entities: {type: Array},
         };
-      }
+    }
+
+    constructor() {
+        super();
+        this._select_start = '';
+        this._hours = [];
+        this._weekdays = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+        for(var i=0; i<24; i+=0.5) {
+            this._hours.push(i);
+        }
+        //this.schedule = Array(this._weekdays.length).fill(0).map(x => Array(this._hours.length).fill(0).map((x) => Object({cval:'eco', nval:''})));
+        //this.entities = [];
+        console.log("end constructor")
+    }
   
   
     getCardSize() {
@@ -58,304 +67,216 @@ class ScheduleListCard extends LitElement {
   
     setConfig(config) {
       this._config = config;
-      this._uncheckedItems = [];
-      this._checkedItems = [];
+      if( !config.id ) {
+          throw new Error('You need to define an id');
+      }
+      if( !config.title ) {
+        throw new Error('You need to define a title');
+      }
+
       this._fetchData();
+      
     }
-  
+
     connectedCallback() {
-      super.connectedCallback();
-  
-      if (this.hass) {
-        this._unsubEvents = this.hass.connection.subscribeEvents(
-          () => this._fetchData(),
-          "schedule_list_updated"
-        );
+        super.connectedCallback();
         this._fetchData();
-      }
     }
-  
+
     disconnectedCallback() {
-      super.disconnectedCallback();
-  
-      if (this._unsubEvents) {
-        this._unsubEvents.then((unsub) => unsub());
-      }
+        super.disconnectedCallback();
     }
+  
   
     render() {
-      if (!this._config || !this.hass) {
+      if (!this._config || !this.hass || !this.schedule || !this.entities) {
         return html``;
       }
-  
+      console.log("render", this.entities)
       return html`
         <ha-card .header="${this._config.title}">
-          <div class="addRow">
-            <ha-icon
-              class="addButton"
-              @click="${this._addItem}"
-              icon="hass:plus"
-              .title="Add Item"
-            >
-            </ha-icon>
-            
-            <paper-dropdown-menu label="Mode" class="addBox heatmode">
-                <paper-listbox slot="dropdown-content" selected="1">
-                    <paper-item>eco</paper-item>
-                    <paper-item>comfort</paper-item>
-                    <paper-item>away</paper-item>
-                </paper-listbox>
-            </paper-dropdown-menu>
-            <paper-checkbox dir="rtl" class="cbDays">L</paper-checkbox>
-            <paper-checkbox dir="rtl" class="cbDays">M</paper-checkbox>
-            <paper-checkbox dir="rtl" class="cbDays">M</paper-checkbox>
-            <paper-checkbox dir="rtl" class="cbDays">J</paper-checkbox>
-            <paper-checkbox dir="rtl" class="cbDays">V</paper-checkbox>
-            <paper-checkbox dir="rtl" class="cbDays">S</paper-checkbox>
-            <paper-checkbox dir="rtl" class="cbDays">D</paper-checkbox>
-            
-            <paper-input
-            label="Début"
-            class="addBox starttime"
-            placeholder="mode days starttime"
-            @keydown="${this._addKeyPress}"
-            type="time"
-            ></paper-input>
-            
-          </div>
-          ${repeat(
-            this._uncheckedItems,
-            (item) => item.id,
-            (item, index) =>
-              html`
-                <div class="editRow">
-                  <paper-checkbox
-                    slot="item-icon"
-                    id="${index}"
-                    ?checked="${item.enable}"
-                    .itemId="${item.id}"
-                    @click="${this._completeItem}"
-                    tabindex="0"
-                  ></paper-checkbox>
-                  <paper-dropdown-menu label="Mode">
-                    <paper-listbox slot="dropdown-content" selected="1">
-                    <paper-item>eco</paper-item>
-                    <paper-item>comfort</paper-item>
-                    <paper-item>away</paper-item>
-                    </paper-listbox>
-                </paper-dropdown-menu>
-                  <paper-item-body>
-                    <paper-input
-                      no-label-float
-                      .value="${item.name}"
-                      .itemId="${item.id}"
-                      @change="${this._saveEdit}"
-                    ></paper-input>
-                  </paper-item-body>
-                </div>
-              `
-          )}
-          ${this._checkedItems.length > 0
-            ? html`
-                <div class="divider"></div>
-                <div class="checked">
-                  <span class="label">
-                    checked label
-                  </span>
-                  <ha-icon
-                    class="clearall"
-                    @click="${this._clearItems}"
-                    icon="hass:notification-clear-all"
-                    .title="Clear item"
-                  >
-                  </ha-icon>
-                </div>
-                ${repeat(
-                  this._checkedItems,
-                  (item) => item.id,
-                  (item, index) =>
-                    html`
-                      <div class="editRow">
-                        <paper-checkbox
-                          slot="item-icon"
-                          id="${index}"
-                          ?checked="${item.enable}"
-                          .itemId="${item.id}"
-                          @click="${this._completeItem}"
-                          tabindex="0"
-                        ></paper-checkbox>
-                        <paper-dropdown-menu label="Mode">
-                            <paper-listbox slot="dropdown-content" selected="1">
-                            <paper-item>eco</paper-item>
-                            <paper-item>comfort</paper-item>
-                            <paper-item>away</paper-item>
-                            </paper-listbox>
-                        </paper-dropdown-menu>
-                        <paper-item-body>
-                          <paper-input
-                            no-label-float
-                            .value="${item.name}"
-                            .itemId="${item.id}"
-                            @change="${this._saveEdit}"
-                          ></paper-input>
-                        </paper-item-body>
-                      </div>
+            <div class="wrapper">
+                
+                <div class="entete_h"></div>
+                
+                ${this._hours.map(
+                    (item, index) =>
+                    html`${index%2==0 ? html`<div id="entete_${index}" class="item hours">${item}</div>` : ''}`
+                )}
+                
+                ${this._weekdays.map(
+                    (day, dindex) =>
+                    html`<div class="entete">${day}</div>
+                    ${this._hours.map(
+                        (hour, hindex) =>
+                        html`<div id="${dindex}-${hindex}" class="item" style="background-color: ${MODES[this.schedule[dindex][hindex].nval ? this.schedule[dindex][hindex].nval : this.schedule[dindex][hindex].cval].color};"
+                                @click="${this._onclick}"
+                                @pointerenter="${this._onpointerenter}"
+                                >
+                                </div>`
+                    )}
                     `
                 )}
-              `
-            : ""}
+                
+            </div>
+            <div>
+                <label id="label2">Mode:</label>
+                ${Object.keys(MODES).map(mode => html`
+                <input type="radio" id="${mode}" name="mode" value="${mode}" @change="${this._modeSelected}" checked>
+                <label for="${mode}">${MODES[mode].label}</label>
+                `)}
+            </div>
+            <div>
+                <paper-dropdown-menu label="Thermostat">
+                    <paper-listbox slot="dropdown-content" multi
+                        attr-for-selected="itemname"
+                        .selectedValues=${this.entities}
+                        @selected-values-changed="${this._onselect_thermostat}"
+                        >
+                            ${this._getThermostat().map(name => html`
+                            <paper-item itemname="${name}">${name}</paper-item>
+                            `)}
+                    </paper-listbox>
+                </paper-dropdown-menu>
+            </div>
         </ha-card>
       `;
     }
   
     static get styles() {
       return css`
-        .editRow,
-        .addRow {
-          display: flex;
-          flex-direction: row;
-          align-items: center;
-          justify-content: space-between;
-        }
-  
-        .addButton {
-          padding: 9px 15px 11px 15px;
-          cursor: pointer;
-        }
-  
-        .addBox {
-          display: flex;
-          padding-right: 5px;
+        .wrapper {
+            display: grid;
+            grid-template-columns: auto repeat(48, 1fr);
+            grid-gap: 1px;
         }
 
-        .cbDays {
-            padding: 0 2px 0 0;
-            --paper-checkbox-size: 12px;
-            --paper-checkbox-label-spacing: 2px;
+        .hours {
+            font-size: 10px;
+            grid-column-start: span 2;
         }
-  
-        paper-checkbox {
-          padding: 11px 11px 11px 18px;
-        }
-  
-        paper-input {
-          --paper-input-container-underline: {
-            display: none;
-          }
-          --paper-input-container-underline-focus: {
-            display: none;
-          }
-          --paper-input-container-underline-disabled: {
-            display: none;
-          }
-          position: relative;
-          top: 1px;
-          --paper-input-container-shared-input-style_-_width: 5em;
-        }
-  
-        .checked {
-          margin-left: 17px;
-          margin-bottom: 11px;
-          margin-top: 11px;
-        }
-  
-        .label {
-          color: var(--primary-color);
-        }
-  
-        .divider {
-          height: 1px;
-          background-color: var(--divider-color);
-          margin: 10px;
-        }
-  
-        .clearall {
-          cursor: pointer;
-          margin-bottom: 3px;
-          float: right;
-          padding-right: 10px;
-        }
-  
-        .addRow > ha-icon {
-          color: var(--secondary-text-color);
-        }
+    
       `;
     }
-  
+
     async _fetchData() {
-      if (this.hass) {
-        const checkedItems = [];
-        const uncheckedItems = [];
-        const items = await fetchItems(this.hass);
-        for (const key in items) {
-          if (items[key].enable) {
-            checkedItems.push(items[key]);
-          } else {
-            uncheckedItems.push(items[key]);
-          }
+        if (this.hass) {
+            console.log("prefetch");
+            const data = await fetchSchedule(this.hass, this._config.id);
+            console.log("fetch", "data=",data);
+            // update schedule and entities
+            if( data.schedule ) {
+                this.entities = [...data.entities];
+                this.schedule = [...data.schedule];
+            }
         }
-        this._checkedItems = checkedItems;
-        this._uncheckedItems = uncheckedItems;
-      }
     }
-  
-    _completeItem(ev) {
-      updateItem(this.hass, ev.target.itemId, {
-        enable: ev.target.checked,
-      }).catch(() => this._fetchData());
-      console.log("_completeItem");
+
+    _updateData() {
+        updateSchedule(this.hass, this._config.id, this.schedule, this.entities
+        ).catch(() => this._fetchData());
+        console.log("save");
     }
-  
-    _saveEdit(ev) {
-      updateItem(this.hass, ev.target.itemId, {
-        name: ev.target.value,
-      }).catch(() => this._fetchData());
-      console.log("_saveEdit");
-  
-      ev.target.blur();
-    }
-  
-    _clearItems() {
-      if (this.hass) {
-        console.log("_clearItems");
-        clearItems(this.hass).catch(() => this._fetchData());
-      }
-    }
-  
-    get _newItem() {
-      var heatmode = this.shadowRoot.querySelector(".heatmode").value;
-      var days = []
-      this.shadowRoot.querySelectorAll(".cbDays").forEach(function(element, index) {
-        if( element.checked ) {
-            days.push(index)
+
+    _getThermostat() {
+        const thermostat = [];
+        for( var state in this.hass.states) {
+            if( state.startsWith("climate") ) {
+                thermostat.push(this.hass.states[state].entity_id);
+            }
         }
-      });
-      var starttime = this.shadowRoot.querySelector(".starttime").value;
-      console.log("starttime", starttime);
-
-      return {"heatmode":heatmode, "days":days, "starttime":starttime}
-
+        return thermostat;
     }
-  
-    _addItem(ev) {
-      const newItem = this._newItem;
 
-      console.log("_addItem", newItem);
-  
-      if (newItem.heatmode.length > 0 && newItem.days.length > 0 && newItem.starttime.length > 0) {
-        
-        addItem(this.hass, newItem.heatmode).catch(() => this._fetchData());
-      }
-  
+    _setScheduleMode(id, mode, type, schedule) {
+        const iday = parseInt(id.split('-')[0], 10);
+        const ihours = parseInt(id.split('-')[1], 10);
+        schedule[iday][ihours][type] = mode;
     }
-  
-    _addKeyPress(ev) {
-      if (ev.keyCode === 13) {
-        console.log("_addKeyPress");
-        this._addItem(null);
-      }
+
+    _setScheduleMode2(sid, eid, mode, type, schedule) {
+        var sday = parseInt(sid.split('-')[0], 10);
+        var shour = parseInt(sid.split('-')[1], 10);
+        var eday = parseInt(eid.split('-')[0], 10);
+        var ehour = parseInt(eid.split('-')[1], 10);
+        if( eday < sday ) {
+            const old = sday;
+            sday = eday;
+            eday = old;
+        }
+        if( ehour < shour ) {
+            const old = shour;
+            shour = ehour;
+            ehour = old;
+        }
+        for(var d=sday; d<=eday; d++) {
+            for(var h=shour; h<=ehour; h++) {
+                schedule[d][h][type] = mode;
+            }
+        }
+    }
+
+    _resetScheduleMode(schedule) {
+        schedule.forEach(function(row) {
+            row.forEach(function(item) {
+                item.nval = '';
+            });
+        } );
+    }
+
+    _onclick(ev) {
+        if(ev) {
+
+            if( this._select_start == '' ) {
+                const id = ev.target.id;
+                this._select_start = id;
+                // copy array
+                const newschedule = [...this.schedule];
+                this._setScheduleMode(id, this.mode, 'cval', newschedule);
+                this.schedule = newschedule;
+            } else {
+                this._select_start = '';
+                // validate selection
+                const newschedule = [...this.schedule];
+                newschedule.forEach(function(row) {
+                    row.forEach(function(item) {
+                        if( item.nval ) {
+                            item.cval = item.nval;
+                            item.nval = "";
+                        }
+                    });
+                } );
+                this.schedule = newschedule;
+                // save data
+                this._updateData();
+            }
+        }
+    }
+    
+    _onpointerenter(ev) {
+        if( this._select_start ) {
+            const eid = ev.target.id;
+            const newschedule = [...this.schedule];
+            this._resetScheduleMode(newschedule);
+            this._setScheduleMode2(this._select_start, eid, this.mode, 'nval', newschedule);
+            this.schedule = newschedule;
+        }
+    }
+
+    _modeSelected(ev) {
+        if(ev) {
+            this.mode = ev.target.value;
+        }
+    }
+
+    _onselect_thermostat(ev) {
+        if( this.entities != ev.target.selectedValues ) {
+            this.entities = [...ev.target.selectedValues];
+            console.log("entities", this.entities)
+            this._updateData();
+        }
     }
 }
   
 
-customElements.define("schedule-list-card", ScheduleListCard);
+customElements.define("schedule-card", ScheduleCard);
