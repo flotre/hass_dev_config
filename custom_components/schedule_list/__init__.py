@@ -17,7 +17,7 @@ _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = vol.Schema({DOMAIN: {}}, extra=vol.ALLOW_EXTRA)
 ITEM_UPDATE_SCHEMA = vol.Schema({"enable": bool, ATTR_NAME: str})
 PERSISTENCE = ".schedule_list.json"
-
+EVENT = "schedule_list_updated"
 
 WS_TYPE_SCHEDULE_LIST_FETCH = "schedule_list/fetch"
 WS_TYPE_SCHEDULE_LIST_UPDATE = "schedule_list/update"
@@ -120,9 +120,10 @@ async def websocket_handle_update(hass, connection, msg):
 
     try:
         hass.data[DOMAIN].async_update(sid, data)
+        hass.bus.async_fire(EVENT)
         connection.send_message(websocket_api.result_message(msg["id"]))
     except KeyError:
         connection.send_message(
-            websocket_api.error_message(msg["id"], "item_not_found", "Item not found")
+            websocket_api.error_message(msg["id"], "item_not_found")
         )
 
