@@ -4,6 +4,7 @@ import logging
 import json
 from datetime import datetime, timedelta
 import voluptuous as vol
+import copy
 
 from homeassistant.components.climate import PLATFORM_SCHEMA, ClimateDevice
 from homeassistant.components.climate.const import (
@@ -264,7 +265,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         self._last_ls_date = datetime.now()
         self._last_ns_date = datetime.now()
         self.default_schedule = [{} for i in range(7)]
-        self.schedule = self.default_schedule[:]
+        self.schedule = copy.deepcopy(self.default_schedule)
         self.use_schedule_list = use_schedule_list
         # schedule is array
         if schedule and not use_schedule_list:
@@ -787,7 +788,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
     def _schedule_from_schedule_list(self, data):
         # data is an array 7x48
         # for each row(day)
-        schedule = self.default_schedule[:]
+        schedule = copy.deepcopy(self.default_schedule)
         last_mode = data[6][47]["cval"]
         for day, row in enumerate(data):
             for halfhour, mode in enumerate(row):
