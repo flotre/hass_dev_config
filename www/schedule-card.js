@@ -49,15 +49,13 @@ class ScheduleCard extends LitElement {
 
     constructor() {
         super();
-        this._select_start = '';
+        this._select_start = "";
         this._hours = [];
         this._weekdays = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
         for(var i=0; i<24; i+=0.5) {
             this._hours.push(i);
         }
-        //this.schedule = Array(this._weekdays.length).fill(0).map(x => Array(this._hours.length).fill(0).map((x) => Object({cval:'eco', nval:''})));
-        //this.entities = [];
-        console.log("end constructor")
+        this.mode = "comfort";
     }
   
   
@@ -92,7 +90,7 @@ class ScheduleCard extends LitElement {
       if (!this._config || !this.hass || !this.schedule || !this.entities) {
         return html``;
       }
-      console.log("render", this.entities)
+      console.log("render", this.entities, this.schedule);
       return html`
         <ha-card .header="${this._config.title}">
             <div class="wrapper">
@@ -101,7 +99,7 @@ class ScheduleCard extends LitElement {
                 
                 ${this._hours.map(
                     (item, index) =>
-                    html`${index%2==0 ? html`<div id="entete_${index}" class="item hours">${item}</div>` : ''}`
+                    html`${index%2==0 ? html`<div id="entete_${index}" class="item hours">${item}</div>` : html``}`
                 )}
                 
                 ${this._weekdays.map(
@@ -122,7 +120,7 @@ class ScheduleCard extends LitElement {
             <div>
                 <label id="label2">Mode:</label>
                 ${Object.keys(MODES).map(mode => html`
-                <input type="radio" id="${mode}" name="mode" value="${mode}" @change="${this._modeSelected}" checked>
+                <input type="radio" id="${mode}" name="mode" value="${mode}" @change="${this._modeSelected}" ?checked="${this.mode == mode}">
                 <label for="${mode}">${MODES[mode].label}</label>
                 `)}
             </div>
@@ -168,13 +166,16 @@ class ScheduleCard extends LitElement {
             if( data.schedule ) {
                 this.entities = [...data.entities];
                 this.schedule = [...data.schedule];
+            } else if (!this.schedule && !this.entities) {
+                this.schedule = Array(this._weekdays.length).fill(0).map(x => Array(this._hours.length).fill(0).map((x) => Object({cval:"eco", nval:""})));
+                this.entities = [];
             }
         }
     }
 
     _updateData() {
         updateSchedule(this.hass, this._config.id, this.schedule, this.entities
-        ).catch(() => this._fetchData());
+        ).catch(() => {console.log("updateSchedule.catch"); this._fetchData()});
         console.log("save");
     }
 
@@ -219,7 +220,7 @@ class ScheduleCard extends LitElement {
     _resetScheduleMode(schedule) {
         schedule.forEach(function(row) {
             row.forEach(function(item) {
-                item.nval = '';
+                item.nval = "";
             });
         } );
     }
@@ -227,15 +228,15 @@ class ScheduleCard extends LitElement {
     _onclick(ev) {
         if(ev) {
 
-            if( this._select_start == '' ) {
+            if( this._select_start == "" ) {
                 const id = ev.target.id;
                 this._select_start = id;
                 // copy array
                 const newschedule = [...this.schedule];
-                this._setScheduleMode(id, this.mode, 'cval', newschedule);
+                this._setScheduleMode(id, this.mode, "cval", newschedule);
                 this.schedule = newschedule;
             } else {
-                this._select_start = '';
+                this._select_start = "";
                 // validate selection
                 const newschedule = [...this.schedule];
                 newschedule.forEach(function(row) {
@@ -270,11 +271,7 @@ class ScheduleCard extends LitElement {
     }
 
     _onselect_thermostat(ev) {
-        if( this.entities != ev.target.selectedValues ) {
-            this.entities = [...ev.target.selectedValues];
-            console.log("entities", this.entities)
-            this._updateData();
-        }
+        this._updateData();
     }
 }
   

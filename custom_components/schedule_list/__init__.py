@@ -83,7 +83,7 @@ class ScheduleData:
         def load():
             """Load the items synchronously."""
             _LOGGER.debug("load schedule")
-            return load_json(self.hass.config.path(PERSISTENCE), default=[])
+            return load_json(self.hass.config.path(PERSISTENCE), default={})
 
         self.data = yield from self.hass.async_add_job(load)
 
@@ -104,6 +104,7 @@ def websocket_handle_fetch(hass, connection, msg):
         data = hass.data[DOMAIN].data.get(sid, {'schedule':None, 'entities':None})
     except:
         _LOGGER.debug("Exception in handle fetch %s", sid)
+        data = {'schedule':None, 'entities':None}
     connection.send_message(
         websocket_api.result_message(msg["id"], data)
     )
