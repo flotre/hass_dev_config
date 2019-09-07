@@ -74,9 +74,12 @@ CONF_PREHEAT = "preheat"
 CONF_CONFORT_TEMP = 'confort_temp'
 CONF_ECO_TEMP = 'eco_temp'
 CONF_CALCULATE_PERIOD = 'calculate_period'
+CONF_USE_SCHEDULE_LIST = 'use_schedule_list'
 SUPPORT_FLAGS = (SUPPORT_TARGET_TEMPERATURE | SUPPORT_PRESET_MODE )
 
 PRESET_MODES = [PRESET_NONE, PRESET_AWAY, PRESET_ECO, PRESET_COMFORT]
+
+SCHEDULE_LIST_DOMAIN = "schedule_list"
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
@@ -103,12 +106,14 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
         vol.Optional(CONF_CALCULATE_PERIOD, default=DEFAULT_CALCULATE_PERIOD): vol.All(int, vol.Range(min=1)),
         vol.Optional(CONF_SCHEDULE, default=[]):
             vol.All(cv.ensure_list, [{vol.Required('mode'):vol.Any(vol.In(PRESET_MODES), vol.Coerce(float)),
-                                      vol.Required('days'):cv.string,
-                                      vol.Required('start'):cv.time
-                                      }
-                                    ]
+                                    vol.Required('days'):cv.string,
+                                    vol.Required('start'):cv.time
+                                    }
+                                ]
             ),
-        vol.Optional(CONF_PREHEAT, default=False): cv.boolean
+                
+        vol.Optional(CONF_PREHEAT, default=False): cv.boolean,
+        vol.Optional(CONF_USE_SCHEDULE_LIST, default=False): cv.boolean
     }
 )
 
@@ -135,6 +140,7 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     unit = hass.config.units.temperature_unit
     schedule = config.get(CONF_SCHEDULE)
     preheat = config.get(CONF_PREHEAT)
+    use_schedule_list = config.get(CONF_USE_SCHEDULE_LIST)
 
     async_add_entities(
         [
@@ -158,7 +164,8 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
                 unit,
                 calculate_period,
                 schedule,
-                preheat
+                preheat,
+                use_schedule_list
             )
         ]
     )
@@ -189,10 +196,10 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         unit,
         calculate_period,
         schedule,
-        preheat
+        preheat,
+        use_schedule_list
     ):
         """Initialize the thermostat."""
-        _LOGGER.debug("debug init")
         self._name = name
         self.heater_entity_id = heater_entity_id
         self.in_temp_sensor_entity_id = in_temp_sensor_entity_id
@@ -213,6 +220,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         self._cold_tolerance = cold_tolerance
         self._hot_tolerance = hot_tolerance
         self._hvac_mode = initial_hvac_mode
+        self._last_hvac_mode = ''
         self._saved_target_temp = target_temp
         self._temp_precision = precision
         if self.ac_mode:
@@ -253,11 +261,14 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
 
         # schedule : list of start date by day
         self._last_do_schedule = datetime.now()
-        self.schedule = [{} for i in range(7)]
-        self._parse_schedule(schedule)
-        _LOGGER.debug("schedule: %s", self.schedule)
-
-        _LOGGER.debug("fin init")
+        self._last_ls_date = datetime.now()
+        self._last_ns_date = datetime.now()
+        self.default_schedule = [{} for i in range(7)]
+        self.schedule = self.default_schedule[:]
+        self.use_schedule_list = use_schedule_list
+        # schedule is array
+        if schedule and not use_schedule_list:
+            self._parse_schedule(schedule)
         
 
     async def async_added_to_hass(self):
@@ -413,17 +424,19 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         """Set hvac mode."""
         if hvac_mode == HVAC_MODE_HEAT:
             self._hvac_mode = HVAC_MODE_HEAT
-            _LOGGER.debug("set hvac mode to HEAT")
+            _LOGGER.info("set hvac mode to HEAT")
             await self._async_control_heating(force=True)
         elif hvac_mode == HVAC_MODE_COOL:
             self._hvac_mode = HVAC_MODE_COOL
+            _LOGGER.info("set hvac mode to COOL")
             await self._async_control_heating(force=True)
         elif hvac_mode == HVAC_MODE_AUTO:
             self._hvac_mode = HVAC_MODE_AUTO
+            _LOGGER.info("set hvac mode to AUTO")
             await self._async_control_heating(force=True)
         elif hvac_mode == HVAC_MODE_OFF:
             self._hvac_mode = HVAC_MODE_OFF
-            _LOGGER.debug("set hvac mode to OFF")
+            _LOGGER.info("set hvac mode to OFF")
             if self._is_device_active:
                 await self._async_heater_turn_off()
         else:
@@ -506,16 +519,21 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
 
             if None in (self._in_temp, self._out_temp, self._target_temp):
                 _LOGGER.info(
-                    "in, out or target temperature is None "
+                    "in, out or target temperature is None,\n"
                     "Thermostat not active. %s, %s, %s",
                     self._in_temp,
                     self._out_temp,
                     self._target_temp,
                 )
                 return
+
+            # Logging
+            if self._hvac_mode != self._last_hvac_mode:
+                self._last_hvac_mode = self._hvac_mode
+                _LOGGER.info("hvac mode is %s", self._hvac_mode)
+
             # Thermostat is off
             if self._hvac_mode == HVAC_MODE_OFF:
-                _LOGGER.debug("Thermostat is off")
                 if self.forced or self.heat:  # thermostat setting was just changed so we kill the heating
                     self.forced = False
                     self.endheat = now
@@ -523,7 +541,6 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                     await self._async_heater_turn_off()
             # Thermostat is in forced mode
             elif self._hvac_mode == HVAC_MODE_HEAT:
-                _LOGGER.debug("Thermostat is forced mode")
                 if self.forced:
                     if self.endheat <= now:
                         self.forced = False
@@ -538,7 +555,6 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                     await self._async_heater_turn_on()
             # Thermostat is in mode auto
             elif self._hvac_mode == HVAC_MODE_AUTO:
-                _LOGGER.debug("Thermostat is mode auto")
                 # thermostat setting was just changed from "forced" so we kill the forced mode
                 if self.forced:
                     self.forced = False
@@ -742,7 +758,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                     _LOGGER.error("schedule format error for %s (ignored)", s['days'])
                     continue
     
-    def _schedule_get_next_start(self):
+    def _schedule_get_ns_date(self):
         now = datetime.now()
         weekday = now.weekday()
         for i in range(7):
@@ -751,13 +767,11 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             for start in dict_start:
                 dt_start = now.replace(day=now.day+i, hour=start.hour, minute=start.minute, second=0, microsecond=0)
                 if dt_start >= now:
-                    # turn mode on
-                    _LOGGER.debug("Schedule: next start mode %s@%s", self.schedule[wd][start], dt_start)
                     return dt_start, self.schedule[wd][start]
         
         return None, None
     
-    def _schedule_get_last_start(self):
+    def _schedule_get_ls_date(self):
         now = datetime.now()
         weekday = now.weekday()
         for i in range(7):
@@ -766,11 +780,25 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             for start in dict_start:
                 dt_start = now.replace(day=now.day+i, hour=start.hour, minute=start.minute, second=0, microsecond=0)
                 if dt_start <= now:
-                    # turn mode on
-                    _LOGGER.debug("Schedule: last start mode %s@%s", self.schedule[wd][start], dt_start)
                     return dt_start, self.schedule[wd][start]
         
         return None, None
+
+    def _schedule_from_schedule_list(self, data):
+        # data is an array 7x48
+        # for each row(day)
+        schedule = self.default_schedule[:]
+        last_mode = data[6][47]["cval"]
+        for day, row in enumerate(data):
+            for halfhour, mode in enumerate(row):
+                if mode["cval"] != last_mode:
+                    start = datetime.now().replace(hour=int(halfhour/2), minute=30 if halfhour%2 else 0)
+                    schedule[day][start] = mode["cval"]
+                    last_mode = mode["cval"]
+
+        return schedule
+                    
+
 
 
     async def _async_do_schedule(self, time):
@@ -778,20 +806,39 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             return
 
         # get planning
-        data = self.hass.data["schedule_list"]
-        _LOGGER.debug("schedule schedule list: %s", data.items)
+        if self.use_schedule_list:
+            if SCHEDULE_LIST_DOMAIN in self.hass.data:
+                # get schedule
+                for sched_name, sched_data in self.hass.data[SCHEDULE_LIST_DOMAIN].data.items():
+                    if self.entity_id in sched_data["entities"]:
+                        self.schedule = self._schedule_from_schedule_list(sched_data["schedule"])
+                        # only first match
+                        break
+            else:
+                _LOGGER.error("option use_schedule_list need schedule_list component")
+                return
+                
+        
         # date
         now = datetime.now()
         # get last and next mode
-        last_start, ls_mode = self._schedule_get_last_start()
-        next_start, ns_mode = self._schedule_get_next_start()
+        ls_date, ls_mode = self._schedule_get_ls_date()
+        ns_date, ns_mode = self._schedule_get_ns_date()
+
+        # logging
+        if ls_date and self._last_ls_date != ls_date:
+            self._last_ls_date = ls_date
+            _LOGGER.debug("last=%s@%s", ls_mode, ls_date)
+        if ns_date and self._last_ns_date != ns_date:
+            self._last_ns_date = ns_date
+            _LOGGER.debug("next=%s@%s", ns_mode, ns_date)
 
         start_mode = None
         preheat_mode = None
 
         # check if mode changed
-        if last_start and ls_mode:
-            if self._last_do_schedule < last_start and last_start <= now:
+        if ls_date and ls_mode:
+            if self._last_do_schedule < ls_date and ls_date <= now:
                 start_mode = ls_mode
         
         self._last_do_schedule = now
@@ -799,7 +846,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         # pre-heat mode
         if self._preheat:
             # TODO check if learning is done
-            if next_start and ns_mode:
+            if ns_date and ns_mode:
                 # get next target temp
                 next_target_temp = self._preset_mode_temp[ns_mode]
                 # next temperature > current temperature
@@ -809,20 +856,20 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                     heatduration = round(0.9 * power * self._calculate_period / 100)
                     _LOGGER.debug("pre-heat: duration=%d", heatduration)
                     endheat = datetime.now() + timedelta(minutes=heatduration)
-                    if endheat >= next_start:
+                    if endheat >= ns_date:
                         # activated next mode
                         preheat_mode = ns_mode
         
         next_mode = None
         if preheat_mode:
-            _LOGGER.debug("pre-heat: next mode to %s@%s",preheat_mode, next_start)
+            _LOGGER.debug("pre-heat: next mode=%s@%s",preheat_mode, ns_date)
             next_mode = preheat_mode
         elif start_mode:
             next_mode = start_mode
-            _LOGGER.debug("schedule: next mode to %s@%s",ls_mode, last_start)
+            _LOGGER.debug("schedule: next mode=%s@%s",ls_mode, ls_date)
         # apply new mode
         if next_mode and next_mode != self.preset_mode:
-            _LOGGER.info("schedule: change mode to %s", next_mode)
+            _LOGGER.info("change mode to %s", next_mode)
             await self.async_set_preset_mode(next_mode)
 
 
