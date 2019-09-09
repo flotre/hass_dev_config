@@ -1,4 +1,9 @@
-"""Adds support for generic smart thermostat units."""
+"""Adds support for generic smart thermostat
+TODO:
+  - pause on open window
+  - heater not working
+
+"""
 import asyncio
 import logging
 import json
@@ -535,11 +540,11 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
 
             # Thermostat is off
             if self._hvac_mode == HVAC_MODE_OFF:
-                if self.forced or self.heat:  # thermostat setting was just changed so we kill the heating
-                    self.forced = False
-                    self.endheat = now
-                    _LOGGER.debug("Switching heat Off !")
-                    await self._async_heater_turn_off()
+                self.forced = False
+                self.endheat = now
+                self.heat = False
+                _LOGGER.debug("Switching heat Off !")
+                await self._async_heater_turn_off()
             # Thermostat is in forced mode
             elif self._hvac_mode == HVAC_MODE_HEAT:
                 if self.forced:
@@ -552,6 +557,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                 else:
                     self.forced = True
                     self.endheat = now + timedelta(minutes=self.forcedduration)
+                    self.heat = True
                     _LOGGER.debug("Forced mode On !")
                     await self._async_heater_turn_on()
             # Thermostat is in mode auto
@@ -581,6 +587,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                     if self.pauserequestchangedtime + timedelta(minutes=self.pauseondelay) <= now:
                         _LOGGER.info("Pause is now On")
                         self.pause = True
+                        self.heat = False
                         await self._async_heater_turn_off()
                 # we start a new calculation
                 elif ((self.nextcalc <= now) and not self.pause) or force:
@@ -664,10 +671,12 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         _LOGGER.debug("Calculation: Power = {} -> heat duration = {} minutes".format(power, heatduration))
 
         if power == 0:
+            self.heat = False
             await self._async_heater_turn_off()
             _LOGGER.debug("No heating requested !")
         else:
             self.endheat = datetime.now() + timedelta(minutes=heatduration)
+            self.heat = True
             _LOGGER.debug("End Heat time = " + str(self.endheat))
             await self._async_heater_turn_on()
             if self.Internals["ALStatus"] < 2:
@@ -779,7 +788,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             wd = (weekday - i) % 7
             dict_start = reversed(sorted(self.schedule[wd]))
             for start in dict_start:
-                dt_start = now.replace(day=now.day+i, hour=start.hour, minute=start.minute, second=0, microsecond=0)
+                dt_start = now.replace(day=now.day-i, hour=start.hour, minute=start.minute, second=0, microsecond=0)
                 if dt_start <= now:
                     return dt_start, self.schedule[wd][start]
         
@@ -855,7 +864,6 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                     # compute pre-heat duration
                     power = self._power(next_target_temp, self._in_temp, self._out_temp)
                     heatduration = round(0.9 * power * self._calculate_period / 100)
-                    _LOGGER.debug("pre-heat: duration=%d", heatduration)
                     endheat = datetime.now() + timedelta(minutes=heatduration)
                     if endheat >= ns_date:
                         # activated next mode
