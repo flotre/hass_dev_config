@@ -129,7 +129,7 @@ class ScheduleCard extends LitElement {
                     <paper-listbox slot="dropdown-content" multi
                         attr-for-selected="itemname"
                         .selectedValues=${this.entities}
-                        @selected-values-changed="${this._onselect_thermostat}"
+                        @click="${this._onclick_thermostat}"
                         >
                             ${this._getThermostat().map(name => html`
                             <paper-item itemname="${name}">${name}</paper-item>
@@ -270,7 +270,7 @@ class ScheduleCard extends LitElement {
         }
     }
 
-    _onselect_thermostat(ev) {
+    _onclick_thermostat(ev) {
         this._updateData();
     }
 }
