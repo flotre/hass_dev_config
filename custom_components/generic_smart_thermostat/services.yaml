@@ -1,0 +1,4 @@
+reset_learning:
+  description: Rest learning coef
+  fields:
+    entity_id: {description: Name of the thermostat to reset., example: climate.thermostat}

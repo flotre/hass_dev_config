@@ -28,7 +28,8 @@ from homeassistant.components.climate.const import (
     PRESET_NONE,
     PRESET_COMFORT,
     PRESET_ECO,
-    PRESET_HOME
+    PRESET_HOME,
+    DOMAIN
 )
 from homeassistant.const import (
     ATTR_ENTITY_ID,
@@ -88,6 +89,9 @@ CONF_OFFSET_HEAT_FAILURE = 'offset_heat_failure'
 SUPPORT_FLAGS = (SUPPORT_TARGET_TEMPERATURE | SUPPORT_PRESET_MODE )
 
 PRESET_MODES = [PRESET_NONE, PRESET_AWAY, PRESET_ECO, PRESET_COMFORT]
+
+SERVICE_RESET_LEARNING = "reset_learning"
+RESET_LEARNING_SCHEMA = cv.ENTITY_SERVICE_SCHEMA
 
 SCHEDULE_LIST_DOMAIN = "schedule_list"
 
@@ -154,32 +158,36 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     use_schedule_list = config.get(CONF_USE_SCHEDULE_LIST)
     offset_heat_failure = config.get(CONF_OFFSET_HEAT_FAILURE)
 
+    thermostat = GenericSmartThermostat(
+                    name,
+                    heater_entity_id,
+                    in_temp_sensor_entity_id,
+                    out_temp_sensor_entity_id,
+                    min_temp,
+                    max_temp,
+                    target_temp,
+                    ac_mode,
+                    min_cycle_power,
+                    cold_tolerance,
+                    hot_tolerance,
+                    initial_hvac_mode,
+                    away_temp,
+                    eco_temp,
+                    comfort_temp,
+                    precision,
+                    unit,
+                    calculate_period,
+                    schedule,
+                    preheat,
+                    use_schedule_list,
+                    offset_heat_failure
+                )
+
+    hass.data[DOMAIN].async_register_entity_service(SERVICE_RESET_LEARNING, RESET_LEARNING_SCHEMA, "async_reset_learning")
+
     async_add_entities(
         [
-            GenericSmartThermostat(
-                name,
-                heater_entity_id,
-                in_temp_sensor_entity_id,
-                out_temp_sensor_entity_id,
-                min_temp,
-                max_temp,
-                target_temp,
-                ac_mode,
-                min_cycle_power,
-                cold_tolerance,
-                hot_tolerance,
-                initial_hvac_mode,
-                away_temp,
-                eco_temp,
-                comfort_temp,
-                precision,
-                unit,
-                calculate_period,
-                schedule,
-                preheat,
-                use_schedule_list,
-                offset_heat_failure
-            )
+            thermostat
         ]
     )
 
@@ -237,10 +245,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         self._last_hvac_mode = ''
         self._saved_target_temp = target_temp
         self._temp_precision = precision
-        if self.ac_mode:
-            self._hvac_list = [HVAC_MODE_COOL, HVAC_MODE_OFF]
-        else:
-            self._hvac_list = [HVAC_MODE_HEAT, HVAC_MODE_OFF, HVAC_MODE_AUTO]
+        self._hvac_list = [HVAC_MODE_HEAT, HVAC_MODE_OFF, HVAC_MODE_AUTO]
         self._in_temp = None
         self._out_temp = None
         self._temp_lock = asyncio.Lock()
@@ -628,6 +633,10 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         """Turn heater toggleable device off."""
         data = {ATTR_ENTITY_ID: self.heater_entity_id}
         await self.hass.services.async_call(HA_DOMAIN, SERVICE_TURN_OFF, data)
+
+    async def async_reset_learning(self):
+        async with self._temp_lock:
+            self.Internals = self.InternalsDefaults.copy()
 
     async def async_set_preset_mode(self, preset_mode: str):
         """Set new preset mode.
