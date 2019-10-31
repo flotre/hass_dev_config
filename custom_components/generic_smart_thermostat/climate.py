@@ -639,6 +639,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
     async def async_reset_learning(self):
         async with self._temp_lock:
             self.Internals = self.InternalsDefaults.copy()
+        await self.async_update_ha_state()
 
     async def async_set_preset_mode(self, preset_mode: str):
         """Set new preset mode.
