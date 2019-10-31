@@ -825,7 +825,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             wd = (weekday + i) % 7
             dict_start = sorted(self.schedule[wd])
             for start in dict_start:
-                dt_start = now.replace(day=now.day+i, hour=start.hour, minute=start.minute, second=0, microsecond=0)
+                dt_start = now.replace(hour=start.hour, minute=start.minute, second=0, microsecond=0) + timedelta(days=i)
                 if dt_start >= now:
                     return dt_start, self.schedule[wd][start]
         
@@ -838,7 +838,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             wd = (weekday - i) % 7
             dict_start = reversed(sorted(self.schedule[wd]))
             for start in dict_start:
-                dt_start = now.replace(day=now.day-i, hour=start.hour, minute=start.minute, second=0, microsecond=0)
+                dt_start = now.replace(hour=start.hour, minute=start.minute, second=0, microsecond=0) - timedelta(days=i)
                 if dt_start <= now:
                     return dt_start, self.schedule[wd][start]
         
