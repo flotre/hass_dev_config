@@ -84,16 +84,7 @@ climate:
     out_temp_sensor: sensor.temp_out
     calculate_period: 30
     preheat: true
-    schedule:
-      - mode: "eco"
-        start: "07:30"
-        days: "0-6"
-      - mode: "comfort"
-        days: "0-6"
-        start: "23:18"
-      - mode: "eco"
-        days: "0-6"
-        start: "23:20"
+    use_schedule_list: true
 
   - platform: generic_thermostat
     name: default thermo
@@ -102,4 +93,5 @@ climate:
     away_temp: 15
     min_cycle_duration:
       seconds: 5
+
 

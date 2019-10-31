@@ -1,7 +1,9 @@
 """Adds support for generic smart thermostat
 TODO:
-  - pause on open window
-  - heater not working
+  - [ ] pause on open window
+  - [X] heater failure
+  - [ ] sensor failure
+  - [ ] config notify entity
 
 """
 import asyncio

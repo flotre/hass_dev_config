@@ -1,1 +1,30 @@
-[]
+- id: '1567888115141'
+  alias: simu chauffe
+  trigger:
+  - hours: '*'
+    minutes: '/6'
+    platform: time_pattern
+    seconds: 0
+  condition:
+  - condition: state
+    entity_id: switch.testswitch
+    state: 'on'
+  action:
+  - data:
+      entity_id: input_number.temp_in
+    service: input_number.increment
+- id: '1567888221654'
+  alias: simu froid
+  trigger:
+  - hours: '*'
+    minutes: '/6'
+    platform: time_pattern
+    seconds: 23
+  condition:
+  - condition: state
+    entity_id: switch.testswitch
+    state: 'off'
+  action:
+  - data:
+      entity_id: input_number.temp_in
+    service: input_number.decrement

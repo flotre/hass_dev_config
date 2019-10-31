@@ -82,10 +82,10 @@ class ScheduleData:
 
         def load():
             """Load the items synchronously."""
-            _LOGGER.debug("load schedule")
             return load_json(self.hass.config.path(PERSISTENCE), default={})
-
+        _LOGGER.debug("Start load schedule")
         self.data = yield from self.hass.async_add_job(load)
+        _LOGGER.debug("End load schedule")
 
     def save(self):
         """Save the items."""
