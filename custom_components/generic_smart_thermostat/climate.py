@@ -194,6 +194,14 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
     )
 
 
+class PrefixAdapter(logging.LoggerAdapter):
+    def __init__(self, prefix, logger):
+        super().__init__(logger, {})
+        self.prefix = prefix
+
+    def process(self, msg, kwargs):
+        return '[%s] %s' % (self.prefix, msg), kwargs
+
 
 class GenericSmartThermostat(ClimateDevice, RestoreEntity):
     """Representation of a Generic Thermostat device."""
@@ -224,6 +232,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         offset_heat_failure
     ):
         """Initialize the thermostat."""
+        self.logger = PrefixAdapter(name, _LOGGER)
         self._name = name
         self.heater_entity_id = heater_entity_id
         self.in_temp_sensor_entity_id = in_temp_sensor_entity_id
@@ -334,7 +343,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                         self._target_temp = self.max_temp
                     else:
                         self._target_temp = self.min_temp
-                    _LOGGER.warning(
+                    self.logger.warning(
                         "Undefined target temperature," "falling back to %s",
                         self._target_temp,
                     )
@@ -357,7 +366,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                     self._target_temp = self.max_temp
                 else:
                     self._target_temp = self.min_temp
-            _LOGGER.warning(
+            self.logger.warning(
                 "No previously saved temperature, setting to %s", self._target_temp
             )
         # Set default state to off
@@ -447,23 +456,23 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         """Set hvac mode."""
         if hvac_mode == HVAC_MODE_HEAT:
             self._hvac_mode = HVAC_MODE_HEAT
-            _LOGGER.info("set hvac mode to HEAT")
+            self.logger.info("set hvac mode to HEAT")
             await self._async_control_heating(force=True)
         elif hvac_mode == HVAC_MODE_COOL:
             self._hvac_mode = HVAC_MODE_COOL
-            _LOGGER.info("set hvac mode to COOL")
+            self.logger.info("set hvac mode to COOL")
             await self._async_control_heating(force=True)
         elif hvac_mode == HVAC_MODE_AUTO:
             self._hvac_mode = HVAC_MODE_AUTO
-            _LOGGER.info("set hvac mode to AUTO")
+            self.logger.info("set hvac mode to AUTO")
             await self._async_control_heating(force=True)
         elif hvac_mode == HVAC_MODE_OFF:
             self._hvac_mode = HVAC_MODE_OFF
-            _LOGGER.info("set hvac mode to OFF")
+            self.logger.info("set hvac mode to OFF")
             if self._is_device_active:
                 await self._async_heater_turn_off()
         else:
-            _LOGGER.error("Unrecognized hvac mode: %s", hvac_mode)
+            self.logger.error("Unrecognized hvac mode: %s", hvac_mode)
             return
         # Ensure we update the current operation after changing the mode
         self.schedule_update_ha_state()
@@ -524,7 +533,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         try:
             self._in_temp = float(state.state)
         except ValueError as ex:
-            _LOGGER.error("Unable to update from sensor: %s", ex)
+            self.logger.error("Unable to update from sensor: %s", ex)
     
     @callback
     def _async_update_out_temp(self, state):
@@ -532,7 +541,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         try:
             self._out_temp = float(state.state)
         except ValueError as ex:
-            _LOGGER.error("Unable to update from sensor: %s", ex)
+            self.logger.error("Unable to update from sensor: %s", ex)
 
     async def _async_control_heating(self, now=None, force=False):
         """Main heating control, must be run at periodic rate."""
@@ -541,7 +550,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                 now = dt.now()
 
             if None in (self._in_temp, self._out_temp, self._target_temp):
-                _LOGGER.info(
+                self.logger.info(
                     "in, out or target temperature is None,\n"
                     "Thermostat not active. %s, %s, %s",
                     self._in_temp,
@@ -553,14 +562,14 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             # Logging
             if self._hvac_mode != self._last_hvac_mode:
                 self._last_hvac_mode = self._hvac_mode
-                _LOGGER.info("hvac mode is %s", self._hvac_mode)
+                self.logger.info("hvac mode is %s", self._hvac_mode)
 
             # Thermostat is off
             if self._hvac_mode == HVAC_MODE_OFF:
                 self.forced = False
                 self.endheat = now
                 self.heat = False
-                _LOGGER.debug("Switching heat Off !")
+                self.logger.debug("Switching heat Off !")
                 await self._async_heater_turn_off()
             # Thermostat is in forced mode
             elif self._hvac_mode == HVAC_MODE_HEAT:
@@ -568,14 +577,14 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                     if self.endheat <= now:
                         self.forced = False
                         self.endheat = now
-                        _LOGGER.debug("Forced mode Off !")
+                        self.logger.debug("Forced mode Off !")
                         await self.async_set_hvac_mode(HVAC_MODE_AUTO)
                         await self._async_heater_turn_off()
                 else:
                     self.forced = True
                     self.endheat = now + timedelta(minutes=self.forcedduration)
                     self.heat = True
-                    _LOGGER.debug("Forced mode On !")
+                    self.logger.debug("Forced mode On !")
                     await self._async_heater_turn_on()
             # Thermostat is in mode auto
             elif self._hvac_mode == HVAC_MODE_AUTO:
@@ -584,7 +593,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                     self.forced = False
                     self.endheat = now
                     self.nextcalc = now   # this will force a recalculation on next heartbeat
-                    _LOGGER.debug("Forced mode Off !")
+                    self.logger.debug("Forced mode Off !")
                     await self._async_heater_turn_off()
                 # heat cycle is over
                 elif (self.endheat <= now or self.pause) and self.heat:
@@ -597,23 +606,23 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                 # we are in pause and the pause switch is now off
                 elif self.pause and not self.pauserequested:
                     if self.pauserequestchangedtime + timedelta(minutes=self.pauseoffdelay) <= now:
-                        _LOGGER.info("Pause is now Off")
+                        self.logger.info("Pause is now Off")
                         self.pause = False
                 # we are not in pause and the pause switch is now on
                 elif not self.pause and self.pauserequested:
                     if self.pauserequestchangedtime + timedelta(minutes=self.pauseondelay) <= now:
-                        _LOGGER.info("Pause is now On")
+                        self.logger.info("Pause is now On")
                         self.pause = True
                         self.heat = False
                         await self._async_heater_turn_off()
                 # we start a new calculation
                 elif ((self.nextcalc <= now) and not self.pause) or force:
                     self.nextcalc = dt.now() + timedelta(minutes=self._calculate_period)
-                    _LOGGER.debug("Next calculation time will be : %s", self.nextcalc)
+                    self.logger.debug("Next calculation time will be : %s", self.nextcalc)
                     # do the thermostat work
                     await self.auto_mode()
             else:
-                _LOGGER.error("unrecognized hvac mode:", self._hvac_mode)
+                self.logger.error("unrecognized hvac mode:", self._hvac_mode)
 
 
     @property
@@ -657,13 +666,13 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                 
                 await self._async_control_heating(force=True)
         else:
-            _LOGGER.error("preset mode not supported:", preset_mode)
+            self.logger.error("preset mode not supported:", preset_mode)
 
         await self.async_update_ha_state()
 
 
     async def auto_mode(self):
-        _LOGGER.debug("Temperatures: Inside = {} / Outside = {}".format(self._in_temp, self._out_temp))
+        self.logger.debug("Temperatures: Inside = {} / Outside = {}".format(self._in_temp, self._out_temp))
 
         # failure detect
         if not self._failure_detect():
@@ -671,7 +680,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             self.auto_callib()
 
         if self._in_temp > self._target_temp + self._hot_tolerance:
-            _LOGGER.debug("Temperature exceeds _target_temp+tolerance=%s",self._target_temp + self._hot_tolerance)
+            self.logger.debug("Temperature exceeds _target_temp+tolerance=%s",self._target_temp + self._hot_tolerance)
             overshoot = True
             power = 0
         else:
@@ -683,23 +692,23 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         elif power > 100:
             power = 100  # upper limit
 
+        heatduration = round(power * (self._calculate_period / 100) * 60)
         # apply minimum power as required
         if power <= self.min_cycle_power and not overshoot:
             _LOGGER.debug(
                 "Calculated power is {}, applying minimum power of {}".format(power, self.min_cycle_power))
             power = self.min_cycle_power
-
-        heatduration = round(power * (self._calculate_period / 100) * 60)
-        _LOGGER.debug("Calculation: Power = {} -> heat duration = {} seconds ({} min)".format(power, heatduration, heatduration/60))
+        
+        self.logger.debug("Calculation: Power = {} -> heat duration = {} seconds ({} min)".format(power, heatduration, heatduration/60))
 
         if power == 0:
             self.heat = False
             await self._async_heater_turn_off()
-            _LOGGER.debug("No heating requested !\n\n")
+            self.logger.debug("No heating requested !\n\n")
         else:
             self.endheat = dt.now() + timedelta(seconds=heatduration)
             self.heat = True
-            _LOGGER.debug("End Heat time = %s\n\n", self.endheat)
+            self.logger.debug("End Heat time = %s\n\n", self.endheat)
             await self._async_heater_turn_on()
         
         # store value
@@ -719,14 +728,14 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
 
         now = dt.now()
         if self.Internals['ALStatus'] != 1:  # not initalized... do nothing
-            _LOGGER.debug("Fist pass at AutoCallib... no callibration")
+            self.logger.debug("Fist pass at AutoCallib... no callibration")
             pass
         elif self.Internals['LastPwr'] == 0:  # heater was off last time, do nothing
-            _LOGGER.debug("Last power was zero... no callibration")
+            self.logger.debug("Last power was zero... no callibration")
             pass
         elif self.Internals['LastPwr'] == 100 and self._in_temp < self.Internals['LastSetPoint']:
             # heater was on max but setpoint was not reached... no learning
-            _LOGGER.debug("Last power was 100% but setpoint not reached... no callibration")
+            self.logger.debug("Last power was 100% but setpoint not reached... no callibration")
             pass
         elif self._in_temp > self.Internals['LastInT'] and self.Internals['LastSetPoint'] > self.Internals['LastInT']:
             # learning ConstC
@@ -734,12 +743,12 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                                                   (self._in_temp - self.Internals['LastInT']) *
                                                   (timedelta.total_seconds(now - self.lastcalc) /
                                                    (self._calculate_period * 60))))
-            _LOGGER.debug("New calc for ConstC = {}".format(ConstC))
+            self.logger.debug("New calc for ConstC = {}".format(ConstC))
             save_constC = self.Internals['ConstC']
             self.Internals['ConstC'] = round((self.Internals['ConstC'] * self.Internals['nbCC'] + ConstC) /
                                              (self.Internals['nbCC'] + 1), 1)
             self.Internals['nbCC'] = min(self.Internals['nbCC'] + 1, 50)
-            _LOGGER.debug("ConstC updated {} -> {}".format(save_constC, self.Internals['ConstC']))
+            self.logger.debug("ConstC updated {} -> {}".format(save_constC, self.Internals['ConstC']))
         elif self._out_temp is not None and self._out_temp < self.Internals['LastSetPoint']:
             # learning ConstT
             ConstT = (self.Internals['ConstT'] + ((self.Internals['LastSetPoint'] - self._in_temp) /
@@ -747,12 +756,12 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                                                   self.Internals['ConstC'] *
                                                   (timedelta.total_seconds(now - self.lastcalc) /
                                                    (self._calculate_period * 60))))
-            _LOGGER.debug("New calc for ConstT = {}".format(ConstT))
+            self.logger.debug("New calc for ConstT = {}".format(ConstT))
             save_constT = self.Internals['ConstT']
             self.Internals['ConstT'] = round((self.Internals['ConstT'] * self.Internals['nbCT'] + ConstT) /
                                              (self.Internals['nbCT'] + 1), 1)
             self.Internals['nbCT'] = min(self.Internals['nbCT'] + 1, 50)
-            _LOGGER.debug("ConstT updated {} -> {}".format(save_constT, self.Internals['ConstT']))
+            self.logger.debug("ConstT updated {} -> {}".format(save_constT, self.Internals['ConstT']))
 
     def _power(self, target_temp, in_temp, out_temp):
         if out_temp is None:
@@ -797,7 +806,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                 try: 
                     days = range(int(s), int(e)+1 )
                 except ValueError:
-                    _LOGGER.error("schedule format error for %s (ignored)", s['days'])
+                    self.logger.error("schedule format error for %s (ignored)", s['days'])
                     continue
             elif "," in days:
                 # list of days
@@ -810,12 +819,12 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                 try:
                     intday = int(d)
                 except ValueError:
-                    _LOGGER.error("schedule format error for %s (ignored)", s['days'])
+                    self.logger.error("schedule format error for %s (ignored)", s['days'])
                     continue
                 if intday >= 0 and intday <= 6:
                     self.schedule[intday][start] = mode
                 else:
-                    _LOGGER.error("schedule format error for %s (ignored)", s['days'])
+                    self.logger.error("schedule format error for %s (ignored)", s['days'])
                     continue
     
     def _schedule_get_ns_date(self):
@@ -875,7 +884,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                         # only first match
                         break
             else:
-                _LOGGER.error("option use_schedule_list need schedule_list component")
+                self.logger.error("option use_schedule_list need schedule_list component")
                 return
                 
         
@@ -888,10 +897,10 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         # logging
         if ls_date and self._last_ls_date != ls_date:
             self._last_ls_date = ls_date
-            _LOGGER.debug("last=%s@%s", ls_mode, ls_date)
+            self.logger.debug("last=%s@%s", ls_mode, ls_date)
         if ns_date and self._last_ns_date != ns_date:
             self._last_ns_date = ns_date
-            _LOGGER.debug("next=%s@%s", ns_mode, ns_date)
+            self.logger.debug("next=%s@%s", ns_mode, ns_date)
 
         start_mode = None
         preheat_mode = None
@@ -921,14 +930,14 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         
         next_mode = None
         if preheat_mode:
-            _LOGGER.debug("pre-heat: next mode=%s@%s",preheat_mode, ns_date)
+            self.logger.debug("pre-heat: next mode=%s@%s",preheat_mode, ns_date)
             next_mode = preheat_mode
         elif start_mode:
             next_mode = start_mode
-            _LOGGER.debug("schedule: next mode=%s@%s",ls_mode, ls_date)
+            self.logger.debug("schedule: next mode=%s@%s",ls_mode, ls_date)
         # apply new mode
         if next_mode and next_mode != self.preset_mode:
-            _LOGGER.info("change mode to %s", next_mode)
+            self.logger.info("change mode to %s", next_mode)
             await self.async_set_preset_mode(next_mode)
 
 
