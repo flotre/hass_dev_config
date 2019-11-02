@@ -692,13 +692,14 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         elif power > 100:
             power = 100  # upper limit
 
-        heatduration = round(power * (self._calculate_period / 100) * 60)
         # apply minimum power as required
         if power <= self.min_cycle_power and not overshoot:
             _LOGGER.debug(
                 "Calculated power is {}, applying minimum power of {}".format(power, self.min_cycle_power))
             power = self.min_cycle_power
         
+        #compute heat duration
+        heatduration = round(power * (self._calculate_period / 100) * 60)        
         self.logger.debug("Calculation: Power = {} -> heat duration = {} seconds ({} min)".format(power, heatduration, heatduration/60))
 
         if power == 0:
