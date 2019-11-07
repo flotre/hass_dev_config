@@ -727,7 +727,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
 
         now = dt.now()
         if self.Internals['ALStatus'] != 1:  # not initalized... do nothing
-            self.logger.debug("Fist pass at AutoCallib... no callibration")
+            self.logger.debug("First pass at AutoCallib... no callibration")
             pass
         elif self.Internals['LastPwr'] == 0:  # heater was off last time, do nothing
             self.logger.debug("Last power was zero... no callibration")
