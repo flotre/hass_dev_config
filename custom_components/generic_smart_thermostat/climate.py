@@ -618,7 +618,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                     self.nextcalc = dt.now() + timedelta(minutes=self._calculate_period)
                     self.logger.debug("Next calculation time will be : %s", self.nextcalc)
                     # do the thermostat work
-                    await self.auto_mode()
+                    await self.auto_mode(force)
             else:
                 self.logger.error("unrecognized hvac mode:", self._hvac_mode)
 
@@ -669,11 +669,11 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
         await self.async_update_ha_state()
 
 
-    async def auto_mode(self):
+    async def auto_mode(self, force):
         self.logger.debug("Temperatures: Inside = {} / Outside = {}".format(self._in_temp, self._out_temp))
 
         # failure detect
-        if not self._failure_detect():
+        if not self._failure_detect() and not force:
             # learning
             self.auto_callib()
 
