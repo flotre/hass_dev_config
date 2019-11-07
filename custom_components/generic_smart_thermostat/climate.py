@@ -323,12 +323,10 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             """Init on startup."""
             # get in temperature
             sensor_state = self.hass.states.get(self.in_temp_sensor_entity_id)
-            if sensor_state and sensor_state.state != STATE_UNKNOWN:
-                self._async_update_in_temp(sensor_state)
+            self._async_update_in_temp(sensor_state)
             # get out temperature
             sensor_state = self.hass.states.get(self.out_temp_sensor_entity_id)
-            if sensor_state and sensor_state.state != STATE_UNKNOWN:
-                self._async_update_out_temp(sensor_state)
+            self._async_update_out_temp(sensor_state)
 
         self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_START, _async_startup)
 
@@ -506,7 +504,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
 
     async def _async_in_temp_changed(self, entity_id, old_state, new_state):
         """Handle temperature changes."""
-        if new_state is None:
+        if new_state is None or new_state.state == STATE_UNKNOWN:
             return
 
         self._async_update_in_temp(new_state)
@@ -514,7 +512,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
 
     async def _async_out_temp_changed(self, entity_id, old_state, new_state):
         """Handle temperature changes."""
-        if new_state is None:
+        if new_state is None or new_state.state == STATE_UNKNOWN:
             return
 
         self._async_update_out_temp(new_state)
