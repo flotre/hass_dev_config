@@ -743,21 +743,27 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                                                    (self._calculate_period * 60))))
             self.logger.debug("New calc for ConstC = {}".format(ConstC))
             save_constC = self.Internals['ConstC']
-            self.Internals['ConstC'] = round((self.Internals['ConstC'] * self.Internals['nbCC'] + ConstC) /
+            new_constC = round((self.Internals['ConstC'] * self.Internals['nbCC'] + ConstC) /
                                              (self.Internals['nbCC'] + 1), 1)
+            if new_constC < 0:
+                new_constC = 0
+            self.Internals['ConstC'] = new_constC 
             self.Internals['nbCC'] = min(self.Internals['nbCC'] + 1, 50)
             self.logger.debug("ConstC updated {} -> {}".format(save_constC, self.Internals['ConstC']))
-        elif self._out_temp is not None and self.Internals['LastSetPoint'] > self.Internals['LastOutT']:
+        elif self._out_temp is not None and self._out_temp < self.Internals['LastSetPoint']:
             # learning ConstT
             ConstT = (self.Internals['ConstT'] + ((self.Internals['LastSetPoint'] - self._in_temp) /
-                                                  (self.Internals['LastSetPoint'] - self.Internals['LastOutT']) *
+                                                  (self.Internals['LastSetPoint'] - self._out_temp) *
                                                   self.Internals['ConstC'] *
                                                   (timedelta.total_seconds(now - self.lastcalc) /
                                                    (self._calculate_period * 60))))
             self.logger.debug("New calc for ConstT = {}".format(ConstT))
             save_constT = self.Internals['ConstT']
-            self.Internals['ConstT'] = round((self.Internals['ConstT'] * self.Internals['nbCT'] + ConstT) /
+            new_constT = round((self.Internals['ConstT'] * self.Internals['nbCT'] + ConstT) /
                                              (self.Internals['nbCT'] + 1), 1)
+            if new_constT < 0:
+                new_constT = 0
+            self.Internals['ConstT'] = new_constT 
             self.Internals['nbCT'] = min(self.Internals['nbCT'] + 1, 50)
             self.logger.debug("ConstT updated {} -> {}".format(save_constT, self.Internals['ConstT']))
 
