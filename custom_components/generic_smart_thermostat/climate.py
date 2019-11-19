@@ -690,7 +690,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
             power = 100  # upper limit
 
         # apply minimum power as required
-        if power <= self.min_cycle_power and not overshoot:
+        if 0 < power <= self.min_cycle_power and not overshoot:
             _LOGGER.debug(
                 "Calculated power is {}, applying minimum power of {}".format(power, self.min_cycle_power))
             power = self.min_cycle_power
