@@ -918,7 +918,7 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
 
         # pre-heat mode
         if self._preheat and self.Internals["nbCC"] > 25 and self._in_temp and self._out_temp:
-            # TODO check if learning is done
+            # check if next start is defined
             if ns_date and ns_mode:
                 # get next target temp
                 next_target_temp = self._preset_mode_temp[ns_mode]
@@ -926,11 +926,13 @@ class GenericSmartThermostat(ClimateDevice, RestoreEntity):
                 if next_target_temp > self._target_temp:
                     # compute pre-heat duration
                     power = self._power(next_target_temp, self._in_temp, self._out_temp)
-                    heatduration = round(0.9 * power * self._calculate_period / 100)
-                    endheat = dt.now() + timedelta(minutes=heatduration)
-                    if endheat >= ns_date:
-                        # activated next mode
-                        preheat_mode = ns_mode
+                    heatduration = round(power * self._calculate_period / 100)
+                    #max preheat = 4 hours
+                    if heatduration <= 4*60:
+                        endheat = dt.now() + timedelta(minutes=heatduration)
+                        if endheat >= ns_date:
+                            # activated next mode
+                            preheat_mode = ns_mode
         
         next_mode = None
         if preheat_mode:
