@@ -58,10 +58,10 @@ from homeassistant.util import dt
 
 _LOGGER = logging.getLogger(__name__)
 
-DEFAULT_TOLERANCE = 0.3
+DEFAULT_TOLERANCE = 0.5
 DEFAULT_NAME = 'Generic Smart Thermostat'
 DEFAULT_AWAY_TEMP = 15.0
-DEFAULT_CONFORT_TEMP = 19.0
+DEFAULT_CONFORT_TEMP = 19.5
 DEFAULT_ECO_TEMP = 17.0
 DEFAULT_MIN_POWER = 10
 DEFAULT_CALCULATE_PERIOD = 30
@@ -93,7 +93,6 @@ SUPPORT_FLAGS = (SUPPORT_TARGET_TEMPERATURE | SUPPORT_PRESET_MODE )
 PRESET_MODES = [PRESET_NONE, PRESET_AWAY, PRESET_ECO, PRESET_COMFORT]
 
 SERVICE_RESET_LEARNING = "reset_learning"
-RESET_LEARNING_SCHEMA = cv.ENTITY_SERVICE_SCHEMA
 
 SCHEDULE_LIST_DOMAIN = "schedule_list"
 
@@ -185,7 +184,7 @@ async def async_setup_platform(hass, config, async_add_entities, discovery_info=
                     offset_heat_failure
                 )
 
-    hass.data[DOMAIN].async_register_entity_service(SERVICE_RESET_LEARNING, RESET_LEARNING_SCHEMA, "async_reset_learning")
+    hass.data[DOMAIN].async_register_entity_service(SERVICE_RESET_LEARNING, {}, "async_reset_learning")
 
     async_add_entities(
         [
