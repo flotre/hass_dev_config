@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 import voluptuous as vol
 import copy
 
-from homeassistant.components.climate import PLATFORM_SCHEMA, ClimateDevice
+from homeassistant.components.climate import PLATFORM_SCHEMA, ClimateEntity
 from homeassistant.components.climate.const import (
     ATTR_PRESET_MODE,
     CURRENT_HVAC_COOL,
@@ -202,7 +202,7 @@ class PrefixAdapter(logging.LoggerAdapter):
         return '[%s] %s' % (self.prefix, msg), kwargs
 
 
-class GenericSmartThermostat(ClimateDevice, RestoreEntity):
+class GenericSmartThermostat(ClimateEntity, RestoreEntity):
     """Representation of a Generic Thermostat device."""
 
     def __init__(
