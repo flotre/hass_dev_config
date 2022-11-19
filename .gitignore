@@ -4,3 +4,4 @@
 *.db
 secrets.yaml
 *.pyc
+home-assistant.log.1
